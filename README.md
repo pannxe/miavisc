@@ -1,6 +1,8 @@
 # Miavisc is a Video → Slide Converter
 
-Born out of my frustration, this tool will convert video of a lecture to pdf file at a blazzingly fast speed. 
+![alt text](img/image.png)
+
+Born out of my frustration, this tool will convert video of a lecture to pdf file at a **blazzingly fast** 🚀 speed. 
 
 Key features includes:
 
@@ -9,7 +11,7 @@ Key features includes:
 
 This project is inspired by 
 
-To any professors out there, for the love of capybara and all is that holy in the world, **PLEASE PROVIDE PDF OF YOUR LECTURE VIDEO**.
+To any professors out there, for the love of capybara and all is that holy in the world, **PLEASE PROVIDE PDF OF YOUR LECTURE VIDEO** 🔥🔥
 
 ## Dependencies
 - Python 3.10 or newer
