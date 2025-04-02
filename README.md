@@ -7,7 +7,7 @@ Born out of my frustration, this tool will convert video of a lecture to pdf fil
 Key features includes:
 
 - [x] **Tunable similarity threshold** — so slightly different frame due to mouse movement / lazer pointers are not treated as different page
-- [ ] **Selectable ignored area** — e.g., camera-frame will be replaced with blank square
+- [x] **Selectable ignored area** — only process centre portion area (to ignore camera, etc.)
 
 This project is inspired by 
 
