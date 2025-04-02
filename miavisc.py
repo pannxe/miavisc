@@ -5,6 +5,7 @@ from functools import partial
 from io import BytesIO
 from PIL import Image
 from img2pdf import convert
+from tqdm import tqdm
 
 import imageio.v3 as iio
 
@@ -33,7 +34,7 @@ def parse_video(input_path: str, output_path:str, check_per_sec: int, threshold:
     extension = ".jpg"
     write_image = partial(iio.imwrite, plugin="pillow", extension=extension)
 
-    for frame in islice(iio.imiter(input_path, plugin="pyav"), None, None, step):
+    for frame in tqdm(islice(iio.imiter(input_path, plugin="pyav"), None, None, step)):
         img_path = BytesIO()
 
         if not prev_hashes:
