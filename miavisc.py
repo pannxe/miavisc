@@ -105,8 +105,8 @@ if __name__ == "__main__":
     )
     arg_parser.add_argument(
         "--check_per_sec",
-        type=int, default=3,
-        help="How many frame to process in 1 sec. (0 = no skip frame) Default = 3"
+        type=int, default=0,
+        help="How many frame to process in 1 sec. (0 = no skip frame)"
     )
     arg_parser.add_argument(
         "--fast",
