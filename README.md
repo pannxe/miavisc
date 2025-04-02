@@ -20,9 +20,9 @@ Tested with real, 1280x720, .mp4, 02:17:44, 30 FPS lecture video using M2 Macboo
 
 - `--check_per_sec 0 --fast 0` → 30 min. (est.)
 - `--check_per_sec 3 --fast 0` → 8 min 55 sec.
-- `--check_per_sec 1 --fast 0` → 6 min 36 sec. (est.)
+- `--check_per_sec 1 --fast 0` → 7 min 23 sec. (est.)
 
-With `--fast 1` various hacks are used to speed thing up. Note the 5.2-9.4x difference.
+With `--fast 1` various hacks are used to speed thing up. Note the 5.2-10.5x difference.
 - `--check_per_sec 0 --fast 1` → 3 min 52 sec.
 - `--check_per_sec 3 --fast 1` → 1 min 43 sec. (default)
 - `--check_per_sec 1 --fast 1` → 1 min 36 sec.
