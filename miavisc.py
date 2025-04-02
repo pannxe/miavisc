@@ -85,9 +85,9 @@ def parse_video(
         bio = BytesIO()
         write_image(bio, frame)
         bio.seek(0)
-        return bio.read()
+        return bio
 
-    return [frame_to_bytes(img) for img in images]
+    return [frame_to_bytes(img).read() for img in images]
 
 
 if __name__ == "__main__":
