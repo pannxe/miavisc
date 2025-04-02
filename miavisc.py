@@ -22,7 +22,9 @@ def parse_video(
     output_path: str,
     check_per_sec: int,
     threshold: int,
-    fast: int
+    fast: int,
+    crop_zoom: str,
+    scale: str
 ):
     metadata = iio.immeta(input_path, plugin="pyav")
 
@@ -31,22 +33,27 @@ def parse_video(
     
     total_frames = ceil(metadata["duration"] * metadata["fps"] / step)
 
-    page_indexes = []
-    prev_hashes = []
+    unique_hashes = {}
 
     def hash_image(img):
         return dhash(Image.open(img))
 
-    def exist_close_hash(current_hash):
-        for prev_hash in prev_hashes:
-            if prev_hash - current_hash <= threshold:
-                return True
-        return False
+    def del_close_hash(current_hash):
+        similar_hash = []
+        for unique_hash in unique_hashes:
+            if unique_hash - current_hash <= threshold:
+                similar_hash.append(unique_hash)
+        
+        for hash_ in similar_hash:
+            del unique_hashes[hash_]
 
     _extension = ".jpg"
     write_image = partial(iio.imwrite, plugin="pillow", extension=_extension)
 
-    _filter = [("scale", "0.25*in_w:0.25*in_h")] if fast else []
+    _filter = [("scale", f"{scale}*in_w:{scale}*in_h")] if fast else []
+    if crop_zoom:
+        _filter.append(("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h"))
+    
     _thread_type = "FRAME" if fast else "SLICE"
     frames = enumerate(iio.imiter(
         input_path,
@@ -54,32 +61,21 @@ def parse_video(
         thread_type=_thread_type,
         filter_sequence=_filter 
     ))
+
     for index, frame in tqdm(islice(frames, 0, None, step), total=total_frames, desc="Parsing Video "):
         img_path = BytesIO()
-
-        if not prev_hashes:
-            write_image(img_path, frame)
-            prev_hashes.append(hash_image(img_path))
-
-            page_indexes.append(index)
-            continue
-
         write_image(img_path, frame)
 
         img_path.seek(0)
         current_hash = hash_image(img_path)
 
-        same_image = exist_close_hash(current_hash)
-        if same_image:
-            continue
-
-        page_indexes.append(index)
-        prev_hashes.append(current_hash)
+        del_close_hash(current_hash)
+        unique_hashes[current_hash] = index
     
-    print(f"\nFound {len(page_indexes)} potentially unique slide(s).\n")
+    print(f"\nFound {len(unique_hashes)} potentially unique slide(s).\n")
 
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [vid.read(index=idx) for idx in tqdm(page_indexes, desc="Getting Images")]
+        images = [vid.read(index=idx) for idx in tqdm(sorted(unique_hashes.values()), desc="Getting Images")]
     
     def frame_to_bytes(frame):
         bio = BytesIO()
@@ -117,6 +113,17 @@ if __name__ == "__main__":
         type=int, default=1,
         help="Use various hacks to speed up the process (might affect the final result)."
     )
+    arg_parser.add_argument(
+        "--crop_zoom",
+        type=str, default="",
+        help="Only process inner <str> of the video. Recommened: '4/5'"
+    )
+    arg_parser.add_argument(
+        "--process_scale",
+        type=str, default="0.25",
+        help="Process at <num> times the original resolution. (default = 0.25)"
+    )
+    
     args = arg_parser.parse_args()
 
     pages = parse_video(
@@ -124,6 +131,8 @@ if __name__ == "__main__":
         args.output,
         args.check_per_sec,
         args.threshold,
-        args.fast
+        args.fast,
+        args.crop_zoom,
+        args.process_scale
     )
     convert_to_pdf(args.output, pages)
