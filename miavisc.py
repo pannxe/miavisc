@@ -12,9 +12,9 @@ import imageio.v3 as iio
 
 
 def convert_to_pdf(output_path, pages):
-    print("\nMaking pdf...\n")
-    with open(output_path, "wb") as f:
-        f.write(convert([page.read() for page in tqdm(pages)]))
+    with open(output_path, "wb") as f:                             
+        # f.write(convert([page.read() for page in pages]))
+        f.write(convert(pages))
 
 
 def parse_video(
@@ -54,10 +54,7 @@ def parse_video(
         thread_type=_thread_type,
         filter_sequence=_filter 
     ))
-
-    print("Parsing video...\n")
-    
-    for index, frame in tqdm(islice(frames, 0, None, step), total=total_frames):
+    for index, frame in tqdm(islice(frames, 0, None, step), total=total_frames, desc="Parsing Video "):
         img_path = BytesIO()
 
         if not prev_hashes:
@@ -79,17 +76,16 @@ def parse_video(
         page_indexes.append(index)
         prev_hashes.append(current_hash)
     
-    print(f"\nFound {len(page_indexes)} potentially unique slide(s).")
-    print("Compling images...\n")
+    print(f"\nFound {len(page_indexes)} potentially unique slide(s).\n")
 
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [vid.read(index=idx) for idx in tqdm(page_indexes)]
+        images = [vid.read(index=idx) for idx in tqdm(page_indexes, desc="Getting Images")]
     
     def frame_to_bytes(frame):
         bio = BytesIO()
         write_image(bio, frame)
         bio.seek(0)
-        return bio
+        return bio.read()
 
     return [frame_to_bytes(img) for img in images]
 
