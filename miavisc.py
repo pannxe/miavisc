@@ -10,10 +10,8 @@ from math import ceil
 
 import imageio.v3 as iio
 
-
 def convert_to_pdf(output_path, pages):
     with open(output_path, "wb") as f:                             
-        # f.write(convert([page.read() for page in pages]))
         f.write(convert(pages))
 
 
@@ -31,7 +29,7 @@ def parse_video(
     step = 1 if check_per_sec == 0 else\
         max(int(metadata["fps"] / check_per_sec), 1)
     
-    total_frames = ceil(metadata["duration"] * metadata["fps"] / step)
+    n_frames = ceil(metadata["duration"] * metadata["fps"] / step)
 
     unique_hashes = {}
 
@@ -62,7 +60,7 @@ def parse_video(
         filter_sequence=_filter 
     ))
 
-    for index, frame in tqdm(islice(frames, 0, None, step), total=total_frames, desc="Parsing Video "):
+    for index, frame in tqdm(islice(frames, 0, None, step), total=n_frames, desc="Parsing Video "):
         img_path = BytesIO()
         write_image(img_path, frame)
 
@@ -126,13 +124,20 @@ if __name__ == "__main__":
     
     args = arg_parser.parse_args()
 
-    pages = parse_video(
+    # pages = parse_video(
+    #     args.input,
+    #     args.output,
+    #     args.check_per_sec,
+    #     args.threshold,
+    #     args.fast,
+    #     args.crop_zoom,
+    #     args.process_scale
+    # )
+    n_frames, frames = get_indexed_frames(
         args.input,
-        args.output,
         args.check_per_sec,
-        args.threshold,
         args.fast,
         args.crop_zoom,
         args.process_scale
     )
-    convert_to_pdf(args.output, pages)
+    # convert_to_pdf(args.output, pages)
