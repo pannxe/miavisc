@@ -1,88 +1,133 @@
 from argparse import ArgumentParser
-from imagehash import dhash
 from itertools import islice
-from functools import partial
-from io import BytesIO
-from PIL import Image
-from img2pdf import convert
-from tqdm.auto import tqdm
 from math import ceil
+from io import BytesIO
 
 import imageio.v3 as iio
+import cv2
+from tqdm import tqdm
+from img2pdf import convert
+from imagehash import dhash
+from PIL import Image
 
-def convert_to_pdf(output_path, pages):
-    with open(output_path, "wb") as f:                             
-        f.write(convert(pages))
+fast = False
 
+def frame_to_bytes(frame):
+    bio = BytesIO()
+    iio.imwrite(bio, frame, plugin="pillow", extension=".jpg")
+    bio.seek(0)
+    return bio
 
-def parse_video(
+def get_indexed_frames(
     input_path: str,
-    output_path: str,
     check_per_sec: int,
-    threshold: int,
-    fast: int,
     crop_zoom: str,
     scale: str
 ):
     metadata = iio.immeta(input_path, plugin="pyav")
+    fps, duration = metadata["fps"], metadata["duration"]
 
-    step = 1 if check_per_sec == 0 else\
-        max(int(metadata["fps"] / check_per_sec), 1)
-    
-    n_frames = ceil(metadata["duration"] * metadata["fps"] / step)
+    step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
+    n_frames = ceil(duration * fps / step)
 
-    unique_hashes = {}
+    filters = [fil for opt, fil in (
+        (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
+        (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h"))
+    ) if opt]
 
-    def hash_image(img):
-        return dhash(Image.open(img))
+    thread_type = "FRAME" if fast else "SLICE"
 
-    def del_close_hash(current_hash):
-        similar_hash = []
-        for unique_hash in unique_hashes:
-            if unique_hash - current_hash <= threshold:
-                similar_hash.append(unique_hash)
-        
-        for hash_ in similar_hash:
-            del unique_hashes[hash_]
-
-    _extension = ".jpg"
-    write_image = partial(iio.imwrite, plugin="pillow", extension=_extension)
-
-    _filter = [("scale", f"{scale}*in_w:{scale}*in_h")] if fast else []
-    if crop_zoom:
-        _filter.append(("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h"))
-    
-    _thread_type = "FRAME" if fast else "SLICE"
-    frames = enumerate(iio.imiter(
+    indexed_frames = enumerate(iio.imiter(
         input_path,
         plugin="pyav",
-        thread_type=_thread_type,
-        filter_sequence=_filter 
+        thread_type=thread_type,
+        filter_sequence=filters 
     ))
+    return n_frames, islice(indexed_frames, 1, None, step)
 
-    for index, frame in tqdm(islice(frames, 0, None, step), total=n_frames, desc="Parsing Video "):
-        img_path = BytesIO()
-        write_image(img_path, frame)
 
-        img_path.seek(0)
-        current_hash = hash_image(img_path)
+def capture_slides(n_frames, indexed_frames):
+    prev_hashes = []
 
-        del_close_hash(current_hash)
-        unique_hashes[current_hash] = index
+    def is_unique_hash(slide):
+        # only checking if `--fast` is on
+        if fast:
+            return True
+        
+        HASH_THRESHOLD = 2
+
+        slide_bytes = frame_to_bytes(slide)
+        current_hash = dhash(Image.open(slide_bytes), hash_size=16)
+
+        is_unique = not any(prev_hash - current_hash <= HASH_THRESHOLD for prev_hash in prev_hashes)
+        if is_unique:
+            prev_hashes.append(current_hash)
+        
+        return is_unique
+
+    history = 15
+    decision_threshold = 0.75
+    max_threshold = 0.15
+    min_threshold = 0.01
+
+    captured = False
+
+    bg_subtrator = cv2.bgsegm.createBackgroundSubtractorGMG(
+        initializationFrames=history,
+        decisionThreshold=decision_threshold
+    )
+
+    # Always include 1st frame
+    capture_indexes = [0]
+
+    for index, frame in tqdm(indexed_frames, desc="Parsing Video ", total=n_frames):
+        fg_mask = bg_subtrator.apply(frame)
+        percent_non_zero = 100 * cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
+
+        if percent_non_zero < max_threshold and not captured:
+            # with `--fast`, perform a rolling rough hash so we don't have to extract so many frames later.
+            if is_unique_hash(frame):
+                continue
+            captured = True
+            capture_indexes.append(index)
+
+        if captured and percent_non_zero >= min_threshold:
+            captured = False
     
-    print(f"\nFound {len(unique_hashes)} potentially unique slide(s).\n")
+    print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
 
+    return capture_indexes
+
+
+def extract_indexes(input_path, indexes):    
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [vid.read(index=idx) for idx in tqdm(sorted(unique_hashes.values()), desc="Getting Images")]
-    
-    def frame_to_bytes(frame):
-        bio = BytesIO()
-        write_image(bio, frame)
-        bio.seek(0)
-        return bio
-
+        images = [vid.read(index=i) for i in tqdm(indexes, desc="Getting Images")]
     return [frame_to_bytes(img).read() for img in images]
 
+
+def get_unique_indexes(slides):
+    HASH_THRESHOLD = 4
+    
+    unique_indexes = []
+    prev_hashes = []
+    
+    for i, slide in enumerate(tqdm(slides, desc="Removing dups  ")):
+        current_hash = dhash(Image.open(BytesIO(slide)))
+        if any(prev_hash - current_hash <= HASH_THRESHOLD for prev_hash in prev_hashes):
+            continue
+        unique_indexes.append(i)
+        prev_hashes.append(current_hash)
+
+    print(f"\nAfter further checking, found {len(unique_indexes)} unique slides.\n")
+
+    return unique_indexes
+
+
+def convert_to_pdf(output_path, slides, unique_indexes):
+    with open(output_path, "wb") as f:                             
+        f.write(convert([slides[i] for i in unique_indexes]))
+    
+    print("Finished making PDF file.")
 
 if __name__ == "__main__":
     arg_parser = ArgumentParser(
@@ -108,7 +153,7 @@ if __name__ == "__main__":
     )
     arg_parser.add_argument(
         "--fast",
-        type=int, default=1,
+        action="store_true", default=False,
         help="Use various hacks to speed up the process (might affect the final result)."
     )
     arg_parser.add_argument(
@@ -124,20 +169,16 @@ if __name__ == "__main__":
     
     args = arg_parser.parse_args()
 
-    # pages = parse_video(
-    #     args.input,
-    #     args.output,
-    #     args.check_per_sec,
-    #     args.threshold,
-    #     args.fast,
-    #     args.crop_zoom,
-    #     args.process_scale
-    # )
-    n_frames, frames = get_indexed_frames(
+    fast = args.fast
+
+    n_frames, indexed_frames = get_indexed_frames(
         args.input,
         args.check_per_sec,
-        args.fast,
         args.crop_zoom,
         args.process_scale
     )
-    # convert_to_pdf(args.output, pages)
+
+    slides_indexes = capture_slides(n_frames, indexed_frames)
+    slides = extract_indexes(args.input, slides_indexes)
+    unique_indexes = get_unique_indexes(slides)
+    convert_to_pdf(args.output, slides, unique_indexes)
