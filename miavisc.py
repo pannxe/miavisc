@@ -20,7 +20,7 @@ def frame_to_bytes(frame) -> BytesIO:
 def similar_prev_hashes(current_hash, prev_hashes, hash_threshold, hist_size) -> bool:
     def in_hist_size(i):
         return i < hist_size if hist_size else True
-    
+
     # similar hashes should be in the back, so search in reverse.
     for i, prev_hash in enumerate(reversed(prev_hashes)):
         if in_hist_size(i) and prev_hash - current_hash <= hash_threshold:
