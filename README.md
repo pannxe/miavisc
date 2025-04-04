@@ -79,9 +79,9 @@ Using GMG algorithm might give you somewhat better result but KKN is faster espe
 
 | Options                            | Execution time | Diff         |
 | ---------------------------------- | -------------- | ------------ |
-| `--fast --knn  --check_per_sec 0`  | 4:21 min       | Base         |
-| `--fast --knn  --check_per_sec 10` | 2:26 min       | `-44.1%`     |
-| `--fast --knn  --check_per_sec 5`  | 1:32 min       | `-64.8%`     |
+| `--fast --knn --check_per_sec 0`  | 4:21 min       | Base         |
+| `--fast --knn --check_per_sec 10` | 2:26 min       | `-44.1%`     |
+| `--fast --knn --check_per_sec 5`  | 1:32 min       | `-64.8%`     |
 | ` --knn --check_per_sec 5`         | 6:10 min       | `+75.1%`[^2] |
 
 [^2]: vs. `--fast --knn --check_per_sec 5`
