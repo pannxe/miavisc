@@ -51,9 +51,10 @@ def get_indexed_frames(
 def get_captured_indexes(
     indexed_frames,
     init_frames,
-    decision_threshold,
+    d_threshold,
     max_threshold,
     min_threshold,
+    use_knn,
     fast
 ) -> list[int]:
     prev_hashes: [ImageHash] = []
@@ -68,17 +69,24 @@ def get_captured_indexes(
         slide_bytes = frame_to_bytes(slide)
         current_hash = dhash(Image.open(slide_bytes), hash_size=8)
 
-        is_unique = not any(prev_hash - current_hash <=
-                            hash_threshold for prev_hash in prev_hashes)
+        is_unique = not any(
+            prev_hash - current_hash <= hash_threshold
+            for prev_hash in prev_hashes
+        )
         if is_unique:
             prev_hashes.append(current_hash)
         return is_unique
 
     captured = False
 
-    bg_subtrator = cv2.bgsegm.createBackgroundSubtractorGMG(
+    bg_subtrator = cv2.createBackgroundSubtractorKNN(
+        history=init_frames,
+        dist2Threshold=d_threshold if d_threshold else 100,
+        detectShadows=False
+    ) if use_knn else \
+        cv2.bgsegm.createBackgroundSubtractorGMG(
         initializationFrames=init_frames,
-        decisionThreshold=decision_threshold
+        decisionThreshold=d_threshold if d_threshold else 0.75
     )
 
     # Always include 1st frame
@@ -154,19 +162,24 @@ if __name__ == "__main__":
         help="Threshold for final hash. (default = 4)"
     )
     arg_parser.add_argument(
+        "--use_knn",
+        default=False, action="store_true",
+        help="Use KNN instead of GMG"
+    )
+    arg_parser.add_argument(
         "--max_threshold",
         type=float, default=0.15,
-        help="Max threshold for GMG (in %). (default = 0.15)"
+        help="Max threshold for GMG/KNN (in %). (default = 0.15)"
     )
     arg_parser.add_argument(
         "--min_threshold",
         type=float, default=0.01,
-        help="Min threshold for GMG (in %). (default = 0.01)"
+        help="Min threshold for GMG/KNN (in %). (default = 0.01)"
     )
     arg_parser.add_argument(
-        "--decision_threshold",
-        type=float, default=0.75,
-        help="Decision threshold for GMG. (default = 0.75)"
+        "--d_threshold",
+        type=float, default=None,
+        help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
     )
     arg_parser.add_argument(
         "--init_frames",
@@ -207,9 +220,10 @@ if __name__ == "__main__":
     slides_indexes = get_captured_indexes(
         indexed_frames,
         args.init_frames,
-        args.decision_threshold,
+        args.d_threshold,
         args.max_threshold,
         args.min_threshold,
+        args.use_knn,
         args.fast
     )
     slides = extract_indexes(args.input, slides_indexes)
