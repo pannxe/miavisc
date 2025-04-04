@@ -14,7 +14,6 @@ from PIL import Image
 def frame_to_bytes(frame) -> BytesIO:
     bio = BytesIO()
     iio.imwrite(bio, frame, plugin="pillow", extension=".jpg")
-    bio.seek(0)
     return bio
 
 
@@ -45,7 +44,11 @@ def get_indexed_frames(
         filter_sequence=filters
     ))
 
-    return tqdm(islice(indexed_frames, 1, None, step), desc="Parsing Video ", total=n_frames-1)
+    return tqdm(
+        islice(indexed_frames, 1, None, step), 
+        desc="Parsing Video ", 
+        total=n_frames-1
+    )
 
 
 def get_captured_indexes(
@@ -54,7 +57,7 @@ def get_captured_indexes(
     d_threshold,
     max_threshold,
     min_threshold,
-    use_knn,
+    knn,
     fast,
     hash_threshold
 ) -> list[int]:
@@ -65,13 +68,13 @@ def get_captured_indexes(
         if not fast:
             return True
 
-        hash_threshold = max(1, hash_threshold)
+        fast_hash_threshold = max(1, hash_threshold/2)
 
         slide_bytes = frame_to_bytes(slide)
         current_hash = dhash(Image.open(slide_bytes), hash_size=8)
 
         is_unique = not any(
-            prev_hash - current_hash <= hash_threshold
+            prev_hash - current_hash <= fast_hash_threshold
             for prev_hash in prev_hashes
         )
         if is_unique:
@@ -84,7 +87,7 @@ def get_captured_indexes(
         history=init_frames,
         dist2Threshold=d_threshold if d_threshold else 100,
         detectShadows=False
-    ) if use_knn else \
+    ) if knn else \
         cv2.bgsegm.createBackgroundSubtractorGMG(
         initializationFrames=init_frames,
         decisionThreshold=d_threshold if d_threshold else 0.75
@@ -99,7 +102,8 @@ def get_captured_indexes(
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
         if percent_non_zero < max_threshold and not captured:
-            # with `--fast`, perform a rolling rough hash so we don't have to extract so many frames later.
+            # with `--fast`, perform a rolling rough hash 
+            # so we don't have to extract so many frames later.
             if not is_unique_hash(frame):
                 continue
             captured = True
@@ -130,16 +134,15 @@ def get_unique_indexes(slides, hash_threshold) -> list[int]:
             continue
         unique_indexes.append(i)
         prev_hashes.append(current_hash)
-        slide.seek(0)
-    print(
-        f"\nAfter further checking, {len(unique_indexes)} potentially unique slides remain.\n")
+
+    print(f"\n{len(unique_indexes)} slides remain after postprocessing.\n")
 
     return unique_indexes
 
 
 def convert_to_pdf(output_path, slides, unique_indexes):
     with open(output_path, "wb") as f:
-        f.write(convert([slides[i].read() for i in unique_indexes]))
+        f.write(convert([slides[i].getvalue() for i in unique_indexes]))
 
     print("Finished making PDF file.")
 
@@ -160,10 +163,10 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "--hash_threshold",
         type=int, default=4,
-        help="Threshold for final hash. (default = 4)"
+        help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
     )
     arg_parser.add_argument(
-        "--use_knn",
+        "--knn",
         default=False, action="store_true",
         help="Use KNN instead of GMG"
     )
@@ -224,7 +227,7 @@ if __name__ == "__main__":
         args.d_threshold,
         args.max_threshold,
         args.min_threshold,
-        args.use_knn,
+        args.knn,
         args.fast,
         args.hash_threshold
     )
