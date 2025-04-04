@@ -17,9 +17,16 @@ def frame_to_bytes(frame) -> BytesIO:
     )
 
 
-def similar_prev_hashes(current_hash, prev_hashes, hash_threshold, hist_size) -> bool:
+def similar_prev_hashes(
+    current_hash,
+    prev_hashes,
+    hash_threshold,
+    hash_hist_size
+) -> bool:
     def in_hist_size(i):
-        return i < hist_size if hist_size else True
+        if not hash_hist_size:
+            return True
+        return i < hash_hist_size
 
     # similar hashes should be in the back, so search in reverse.
     for i, prev_hash in enumerate(reversed(prev_hashes)):
@@ -86,8 +93,8 @@ def get_captured_indexes(
         if not fast:
             return True
 
-        fast_hash_threshold = max(1, hash_threshold/2)
-        fast_hash_hist_size = max(1, hash_hist_size/2)
+        fast_hash_threshold = int(max(1, hash_threshold/2))
+        fast_hash_hist_size = int(max(1, hash_hist_size/2))
 
         slide_bytes = frame_to_bytes(slide)
         current_hash = dhash(Image.open(slide_bytes), hash_size=hash_size)
@@ -165,7 +172,7 @@ def get_unique_indexes(
             hash_threshold,
             hash_hist_size
         )
-        if is_unique:
+        if not is_unique:
             continue
         unique_indexes.append(i)
         prev_hashes.append(current_hash)
