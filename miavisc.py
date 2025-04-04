@@ -55,7 +55,8 @@ def get_captured_indexes(
     max_threshold,
     min_threshold,
     use_knn,
-    fast
+    fast,
+    hash_threshold
 ) -> list[int]:
     prev_hashes: [ImageHash] = []
 
@@ -64,7 +65,7 @@ def get_captured_indexes(
         if not fast:
             return True
 
-        hash_threshold = 1
+        hash_threshold = max(1, hash_threshold)
 
         slide_bytes = frame_to_bytes(slide)
         current_hash = dhash(Image.open(slide_bytes), hash_size=8)
@@ -224,7 +225,8 @@ if __name__ == "__main__":
         args.max_threshold,
         args.min_threshold,
         args.use_knn,
-        args.fast
+        args.fast,
+        args.hash_threshold
     )
     slides = extract_indexes(args.input, slides_indexes)
     unique_indexes = get_unique_indexes(slides, args.hash_threshold)
