@@ -2,7 +2,7 @@
 
 ![alt text](img/image.png)
 
-Born out of my frustration, this tool will convert video of a lecture to pdf file at a **blazzingly fast** 🚀 speed. 
+Born out of my frustration, this tool will convert video of a lecture to pdf file at a **blazzingly fast** 🚀 (sarcasm intended) speed. 
 
 Key features includes:
 
@@ -15,22 +15,29 @@ To any professors out there, for the love of capybara and all is that holy in th
 
 ## Dependencies
 - Python 3.10 or newer
-- `imagehash`, `av`, `img2pdf`, `imageio`, and `tqdm`
+- `pip install opencv-contrib-python imagehash av img2pdf imageio tqdm`
 
 ## Brenchmark
-Tested with real, 1280x720, .mp4, 02:17:44, 30 FPS lecture video using M2 Macbook Air with 16 GB memmory.
+Tested on Macbook Air M2, 512 GB SSD, 16 GM memory using 1280x720 @ 60fps, mp4, 1:30 hr lecture.
 
-- `--check_per_sec 0 --fast 0` → 30 min. (est.)
-- `--check_per_sec 3 --fast 0` → 8 min 55 sec.
-- `--check_per_sec 1 --fast 0` → 7 min 23 sec. (est.)
+Using GMG algorithm:
 
-With `--fast 1` various hacks are used to speed thing up. Note the 5.2-10.5x difference.
-- `--check_per_sec 0 --fast 1` → 3 min 52 sec. (default)
-- `--check_per_sec 3 --fast 1` → 1 min 43 sec. 
-- `--check_per_sec 1 --fast 1` → 1 min 36 sec.
+- `--fast --check_per_sec 0` → 7 min. 57 sec.
+- `--fast --check_per_sec 10` → 4 min. 4 sec.
+- `--fast --check_per_sec 5` → 2 min. 4 sec.
+- `--check_per_sec 5` → 18 min. 40 sec. (est.)
 
+Using KNN algorithm:
 
-All files are acceptable in accuracy. And the option of `--fast 0` is made just in case speed hacks affect the final file. 
+- `--fast --knn --check_per_sec 0` → 4 min 21 secs.
+- `--fast --knn --check_per_sec 10` → 2 min 26 secs.
+- `--fast --knn --check_per_sec 5` → 1 min 32 secs.
+- `--knn --check_per_sec 5` → 6 min. 10 sec. (est.)
+
+As `--check_per_sec` goes up, risk of page-loss increases but false triggers also decreases. Sweet spot seem to be around 10.
+
+Using GMG algorithm might give you somewhat better result but KKN is faster especially with large `--check_per_sec`. 
+
 
 ## Author
 - [pannxe](https://github.com/pannxe) — Original author
