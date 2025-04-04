@@ -12,9 +12,20 @@ from PIL import Image
 
 
 def frame_to_bytes(frame) -> BytesIO:
-    bio = BytesIO()
-    iio.imwrite(bio, frame, plugin="pillow", extension=".jpg")
-    return bio
+    return BytesIO(
+        iio.imwrite("<bytes>", frame, plugin="pillow", extension=".jpg")
+    )
+
+
+def similar_prev_hashes(current_hash, prev_hashes, hash_threshold, hist_size) -> bool:
+    def in_hist_size(i):
+        return i < hist_size if hist_size else True
+    
+    # similar hashes should be in the back, so search in reverse.
+    for i, prev_hash in enumerate(reversed(prev_hashes)):
+        if in_hist_size(i) and prev_hash - current_hash <= hash_threshold:
+            return True
+    return False
 
 
 def get_indexed_frames(
@@ -30,10 +41,12 @@ def get_indexed_frames(
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
     n_frames = ceil(duration * fps / step)
 
-    filters = [fil for opt, fil in (
-        (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
-        (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
-    ) if opt]
+    filters = [
+        fil for opt, fil in (
+            (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
+            (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
+        ) if opt
+    ]
 
     thread_type = "FRAME" if fast else "SLICE"
 
@@ -41,12 +54,12 @@ def get_indexed_frames(
         input_path,
         plugin="pyav",
         thread_type=thread_type,
-        filter_sequence=filters
+        filter_sequence=filters,
     ))
 
     return tqdm(
-        islice(indexed_frames, 1, None, step), 
-        desc="Parsing Video ", 
+        islice(indexed_frames, 1, None, step),
+        desc="Parsing Video ",
         total=n_frames-1
     )
 
@@ -59,23 +72,29 @@ def get_captured_indexes(
     min_threshold,
     knn,
     fast,
-    hash_threshold
+    hash_size,
+    hash_threshold,
+    hash_hist_size
 ) -> list[int]:
     prev_hashes: [ImageHash] = []
 
     def is_unique_hash(slide):
-        # only checking if `--fast` is on
+        # Only checking if `--fast` is on. This checking make running this portion of code
+        # a little bit slower. However, it should save A LOT of times running `extract_indexes()`
         if not fast:
             return True
 
         fast_hash_threshold = max(1, hash_threshold/2)
+        fast_hash_hist_size = max(1, hash_hist_size/2)
 
         slide_bytes = frame_to_bytes(slide)
-        current_hash = dhash(Image.open(slide_bytes), hash_size=8)
+        current_hash = dhash(Image.open(slide_bytes), hash_size=hash_size)
 
-        is_unique = not any(
-            prev_hash - current_hash <= fast_hash_threshold
-            for prev_hash in prev_hashes
+        is_unique = not similar_prev_hashes(
+            current_hash,
+            prev_hashes,
+            fast_hash_threshold,
+            fast_hash_hist_size
         )
         if is_unique:
             prev_hashes.append(current_hash)
@@ -102,7 +121,7 @@ def get_captured_indexes(
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
         if percent_non_zero < max_threshold and not captured:
-            # with `--fast`, perform a rough hash 
+            # with `--fast`, perform a rough hash
             # so we don't have to extract so many frames later.
             if not is_unique_hash(frame):
                 continue
@@ -117,22 +136,34 @@ def get_captured_indexes(
     return capture_indexes
 
 
-def extract_indexes(input_path, indexes) -> list[BytesIO]:
+def extract_indexes(input_path, indexes, fast) -> list[BytesIO]:
+    thread_type = "FRAME" if fast else "SLICE"
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         images = [
-            vid.read(index=i)
+            vid.read(index=i, thread_type=thread_type, constant_framerate=fast)
             for i in tqdm(indexes, desc="Getting Images")
         ]
     return [frame_to_bytes(img) for img in images]
 
 
-def get_unique_indexes(slides, hash_threshold) -> list[int]:
+def get_unique_indexes(
+    slides,
+    hash_size,
+    hash_threshold,
+    hash_hist_size
+) -> list[int]:
     unique_indexes = []
     prev_hashes = []
 
     for i, slide in enumerate(tqdm(slides, desc="Removing dups  ")):
-        current_hash = dhash(Image.open(slide), hash_size=8)
-        if any(prev_hash - current_hash <= hash_threshold for prev_hash in prev_hashes):
+        current_hash = dhash(Image.open(slide), hash_size=hash_size)
+        is_unique = not similar_prev_hashes(
+            current_hash,
+            prev_hashes,
+            hash_threshold,
+            hash_hist_size
+        )
+        if is_unique:
             continue
         unique_indexes.append(i)
         prev_hashes.append(current_hash)
@@ -156,16 +187,27 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "--input",
         type=str, required=True,
-        help="Path to input video file")
+        help="Path to input video file"
+    )
     arg_parser.add_argument(
         "--output",
         type=str, required=True,
         help="Path to input video file"
     )
     arg_parser.add_argument(
+        "--hash_size",
+        type=int, default=12,
+        help="Hash size. Default = 12."
+    )
+    arg_parser.add_argument(
         "--hash_threshold",
         type=int, default=4,
         help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
+    )
+    arg_parser.add_argument(
+        "--hash_hist_size",
+        type=int, default=5,
+        help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
     )
     arg_parser.add_argument(
         "--knn",
@@ -175,12 +217,12 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "--max_threshold",
         type=float, default=0.15,
-        help="Max threshold for GMG/KNN (in %). (default = 0.15)"
+        help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
     )
     arg_parser.add_argument(
         "--min_threshold",
         type=float, default=0.01,
-        help="Min threshold for GMG/KNN (in %). (default = 0.01)"
+        help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
     )
     arg_parser.add_argument(
         "--d_threshold",
@@ -212,7 +254,6 @@ if __name__ == "__main__":
         type=str, default="0.25",
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
-
     args = arg_parser.parse_args()
 
     indexed_frames = get_indexed_frames(
@@ -222,7 +263,6 @@ if __name__ == "__main__":
         args.process_scale,
         args.fast
     )
-
     slides_indexes = get_captured_indexes(
         indexed_frames,
         args.init_frames,
@@ -231,8 +271,19 @@ if __name__ == "__main__":
         args.min_threshold,
         args.knn,
         args.fast,
-        args.hash_threshold
+        args.hash_size,
+        args.hash_threshold,
+        args.hash_hist_size
     )
-    slides = extract_indexes(args.input, slides_indexes)
-    unique_indexes = get_unique_indexes(slides, args.hash_threshold)
+    slides = extract_indexes(
+        args.input,
+        slides_indexes,
+        args.fast
+    )
+    unique_indexes = get_unique_indexes(
+        slides,
+        args.hash_size,
+        args.hash_threshold,
+        args.hash_hist_size
+    )
     convert_to_pdf(args.output, slides, unique_indexes)
