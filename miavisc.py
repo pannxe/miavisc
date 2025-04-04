@@ -3,6 +3,8 @@ from math import ceil
 from io import BytesIO
 from collections.abc import Iterator
 from itertools import islice
+
+from decord import VideoReader
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
@@ -45,32 +47,40 @@ def get_indexed_frames(
     fast: bool
 ) -> Iterator:
     metadata = iio.immeta(input_path, plugin="pyav")
-    fps, duration = metadata["fps"], metadata["duration"]
+    fps = metadata["fps"]
 
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
-    n_frames = ceil(duration * fps / step)
 
-    filters = [
-        fil for opt, fil in (
-            (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
-            (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
-        ) if opt
-    ]
+    return VideoReader(input_path, width=320, height=180), step
+    
 
-    thread_type = "FRAME" if fast else "SLICE"
+    # metadata = iio.immeta(input_path, plugin="pyav")
+    # fps, duration = metadata["fps"], metadata["duration"]
 
-    indexed_frames = enumerate(iio.imiter(
-        input_path,
-        plugin="pyav",
-        thread_type=thread_type,
-        filter_sequence=filters,
-    ))
+    # step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
+    # n_frames = ceil(duration * fps / step)
 
-    return tqdm(
-        islice(indexed_frames, 1, None, step),
-        desc="Parsing Video ",
-        total=n_frames-1
-    )
+    # filters = [
+    #     fil for opt, fil in (
+    #         (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
+    #         (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
+    #     ) if opt
+    # ]
+
+    # thread_type = "FRAME" if fast else "SLICE"
+
+    # indexed_frames = enumerate(iio.imiter(
+    #     input_path,
+    #     plugin="pyav",
+    #     thread_type=thread_type,
+    #     filter_sequence=filters,
+    # ))
+
+    # return tqdm(
+    #     islice(indexed_frames, 1, None, step),
+    #     desc="Parsing Video ",
+    #     total=n_frames-1
+    # )
 
 
 def get_captured_indexes(
@@ -121,10 +131,15 @@ def get_captured_indexes(
         decisionThreshold=d_threshold if d_threshold else 0.75
     )
 
+    frames, step = indexed_frames
+
     # Always include 1st frame
     capture_indexes: list[int] = [0]
 
-    for index, frame in indexed_frames:
+    for index in tqdm(range(0, len(frames), step), desc="Parsing Video "):
+        frame = frames[index].asnumpy() 
+
+    # for index, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
         percent_non_zero = 100 * \
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
