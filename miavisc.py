@@ -23,7 +23,9 @@ def similar_prev_hashes(current_hash, prev_hashes, hash_threshold, hist_size) ->
 
     # similar hashes should be in the back, so search in reverse.
     for i, prev_hash in enumerate(reversed(prev_hashes)):
-        if in_hist_size(i) and prev_hash - current_hash <= hash_threshold:
+        if not in_hist_size(i):
+            return False
+        if prev_hash - current_hash <= hash_threshold:
             return True
     return False
 
