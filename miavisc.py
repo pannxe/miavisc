@@ -102,7 +102,7 @@ def get_captured_indexes(
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
         if percent_non_zero < max_threshold and not captured:
-            # with `--fast`, perform a rolling rough hash 
+            # with `--fast`, perform a rough hash 
             # so we don't have to extract so many frames later.
             if not is_unique_hash(frame):
                 continue
@@ -119,8 +119,10 @@ def get_captured_indexes(
 
 def extract_indexes(input_path, indexes) -> list[BytesIO]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [vid.read(index=i)
-                  for i in tqdm(indexes, desc="Getting Images")]
+        images = [
+            vid.read(index=i)
+            for i in tqdm(indexes, desc="Getting Images")
+        ]
     return [frame_to_bytes(img) for img in images]
 
 
