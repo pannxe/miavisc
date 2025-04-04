@@ -1,8 +1,8 @@
 from argparse import ArgumentParser
-from math import ceil
+# from math import ceil
 from io import BytesIO
 from collections.abc import Iterator
-from itertools import islice
+# from itertools import islice
 
 from decord import VideoReader
 import imageio.v3 as iio
@@ -39,48 +39,24 @@ def similar_prev_hashes(
     return False
 
 
-def get_indexed_frames(
+def get_frames(
     input_path: str,
-    check_per_sec: int,
+    render_every: int,
     crop_zoom: str,
     scale: str,
     fast: bool
 ) -> Iterator:
-    metadata = iio.immeta(input_path, plugin="pyav")
-    fps = metadata["fps"]
 
-    step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
+    print("Loading frames, will take a while...")
+    with iio.imopen(input_path, "r", plugin="pyav") as f:
+        shape = f.read(index=0).shape
 
-    return VideoReader(input_path, width=320, height=180), step
-    
+    width = int(shape[1] * scale)
+    height = int(shape[0] * scale)
 
-    # metadata = iio.immeta(input_path, plugin="pyav")
-    # fps, duration = metadata["fps"], metadata["duration"]
-
-    # step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
-    # n_frames = ceil(duration * fps / step)
-
-    # filters = [
-    #     fil for opt, fil in (
-    #         (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
-    #         (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
-    #     ) if opt
-    # ]
-
-    # thread_type = "FRAME" if fast else "SLICE"
-
-    # indexed_frames = enumerate(iio.imiter(
-    #     input_path,
-    #     plugin="pyav",
-    #     thread_type=thread_type,
-    #     filter_sequence=filters,
-    # ))
-
-    # return tqdm(
-    #     islice(indexed_frames, 1, None, step),
-    #     desc="Parsing Video ",
-    #     total=n_frames-1
-    # )
+    vr = VideoReader(input_path, width=width, height=height)    
+    batch = vr.get_batch([range(0, len(vr), render_every)]).asnumpy()
+    return batch
 
 
 def get_captured_indexes(
@@ -90,6 +66,7 @@ def get_captured_indexes(
     max_threshold,
     min_threshold,
     knn,
+    render_every,
     fast,
     hash_size,
     hash_threshold,
@@ -131,15 +108,12 @@ def get_captured_indexes(
         decisionThreshold=d_threshold if d_threshold else 0.75
     )
 
-    frames, step = indexed_frames
-
     # Always include 1st frame
     capture_indexes: list[int] = [0]
 
-    for index in tqdm(range(0, len(frames), step), desc="Parsing Video "):
-        frame = frames[index].asnumpy() 
-
+    for index in tqdm(range(0, len(frames), render_every), desc="Parsing Video "):
     # for index, frame in indexed_frames:
+        frame = frames[index]
         fg_mask = bg_subtrator.apply(frame)
         percent_non_zero = 100 * \
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
@@ -161,13 +135,8 @@ def get_captured_indexes(
 
 
 def extract_indexes(input_path, indexes, fast) -> list[BytesIO]:
-    thread_type = "FRAME" if fast else "SLICE"
-    with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [
-            vid.read(index=i, thread_type=thread_type, constant_framerate=fast)
-            for i in tqdm(indexes, desc="Getting Images")
-        ]
-    return [frame_to_bytes(img) for img in images]
+    images = VideoReader(input_path).get_batch(indexes).asnumpy()
+    return [frame_to_bytes(img) for img in tqdm(images, desc="Getting Images")]
 
 
 def get_unique_indexes(
@@ -259,9 +228,9 @@ if __name__ == "__main__":
         help="Number of initialization frames for GMG. (default = 15)"
     )
     arg_parser.add_argument(
-        "--check_per_sec",
-        type=int, default=0,
-        help="How many frame to process in 1 sec. (0 = no skip frame)"
+        "--render_every",
+        type=int, default=1,
+        help="Rander every n frames. (default = 1 = no skip)"
     )
     arg_parser.add_argument(
         "--fast",
@@ -275,25 +244,26 @@ if __name__ == "__main__":
     )
     arg_parser.add_argument(
         "--process_scale",
-        type=str, default="0.25",
+        type=float, default=0.25,
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
     args = arg_parser.parse_args()
 
-    indexed_frames = get_indexed_frames(
+    frames = get_frames(
         args.input,
-        args.check_per_sec,
+        args.render_every,
         args.crop_zoom,
         args.process_scale,
         args.fast
     )
     slides_indexes = get_captured_indexes(
-        indexed_frames,
+        frames,
         args.init_frames,
         args.d_threshold,
         args.max_threshold,
         args.min_threshold,
         args.knn,
+        args.render_every,
         args.fast,
         args.hash_size,
         args.hash_threshold,
