@@ -15,7 +15,7 @@ Key features includes:
 
 [^5]: Overall, results from both programs are very usable without any significant difference (extra or missing slides here and there). Both requires some further manual processing (e.g., delete residual duplications). Note that this evaluation is **SUBJECTIVE** to the creator of this program and thus should be taken with a grain of salt.
 
-This project is inspired by https://github.com/binh234/video2slides and a lot of reference are taken from this work.
+This project is inspired by [binh234/video2slides](https://github.com/binh234/video2slides) and a lot of reference are taken from this work.
 
 To any professors out there, for the love of capybara and all is that holy in the world, **PLEASE PROVIDE PDF OF YOUR LECTURE VIDEO** 🔥🔥
 
