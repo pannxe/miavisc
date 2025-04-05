@@ -5,7 +5,7 @@ from itertools import islice
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
-from img2pdf import convert, get_fixed_dpi_layout_fun
+import img2pdf as i2p
 from imagehash import dhash, ImageHash
 from PIL import Image
 
@@ -80,7 +80,7 @@ def get_captured_indexes(
 ) -> list[int]:
     prev_hashes: [ImageHash] = []
 
-    def is_unique_hash(slide):
+    def is_unique_hash(frame):
         # Only checking if `--fast` is on. This checking make running this portion of code
         # a little bit slower. However, it should save A LOT of times running `extract_indexes()`
         if not fast:
@@ -89,10 +89,7 @@ def get_captured_indexes(
         fast_hash_threshold = int(max(1, hash_threshold/2))
         fast_hash_hist_size = int(max(1, hash_hist_size/2))
 
-        current_hash = dhash(Image.fromarray(slide), hash_size=hash_size)
-        # slide_bytes = frame_to_bytes(slide)
-        # current_hash = dhash(Image.open(slide_bytes), hash_size=hash_size)
-
+        current_hash = dhash(Image.fromarray(frame), hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
             prev_hashes,
@@ -139,11 +136,7 @@ def get_captured_indexes(
     return capture_indexes
 
 
-def extract_indexes(
-    input_path,
-    indexes,
-    fast
-):
+def extract_indexes(input_path, indexes, fast):
     thread_type = "FRAME" if fast else "SLICE"
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         images = [
@@ -188,9 +181,9 @@ def convert_to_pdf(output_path, slides, unique_indexes, dpi, final_extension):
         )
 
     with open(output_path, "wb") as f:
-        f.write(convert(
+        f.write(i2p.convert(
             [frame_to_bytes(slides[i]) for i in unique_indexes],
-            layout_fun=get_fixed_dpi_layout_fun((dpi, dpi))
+            layout_fun=i2p.get_fixed_dpi_layout_fun((dpi, dpi))
         ))
 
     print("Finished making PDF file.")
