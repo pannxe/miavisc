@@ -1,6 +1,5 @@
 from argparse import ArgumentParser
 from math import ceil
-from io import BytesIO
 from collections.abc import Iterator
 from itertools import islice
 import imageio.v3 as iio
@@ -144,7 +143,7 @@ def extract_indexes(
     input_path,
     indexes,
     fast
-) -> list[BytesIO]:
+):
     thread_type = "FRAME" if fast else "SLICE"
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         images = [
@@ -182,15 +181,15 @@ def get_unique_bytes(
 
 
 def convert_to_pdf(output_path, slides, unique_indexes, dpi, final_extension):
-    def frame_to_bytes(frame) -> BytesIO:
-        return BytesIO(iio.imwrite(
+    def frame_to_bytes(frame) -> bytes:
+        return iio.imwrite(
             "<bytes>", frame, plugin="pillow",
             extension=final_extension
-        ))
+        )
 
     with open(output_path, "wb") as f:
         f.write(convert(
-            [frame_to_bytes(slides[i]).getvalue() for i in unique_indexes],
+            [frame_to_bytes(slides[i]) for i in unique_indexes],
             layout_fun=get_fixed_dpi_layout_fun((dpi, dpi))
         ))
 
