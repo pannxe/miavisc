@@ -153,7 +153,7 @@ def extract_indexes(
     return images
 
 
-def get_unique_bytes(
+def get_unique_indexes(
     slides,
     hash_size,
     hash_threshold,
@@ -306,7 +306,7 @@ if __name__ == "__main__":
         slides_indexes,
         args.fast,
     )
-    unique_indexes = get_unique_bytes(
+    unique_indexes = get_unique_indexes(
         slides,
         args.hash_size,
         args.hash_threshold,
