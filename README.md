@@ -6,12 +6,12 @@ Born out of my frustration, this tool will convert video of a lecture to pdf fil
 
 Key features includes:
 
-- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **3x faster**[^4] while producing comparable result[^5].
+- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **3.6x faster**[^4] while producing comparable result[^5].
 - [x] **Tunable similarity threshold** — so slightly different frame due to mouse movement / lazer pointers are not treated as different page
 - [x] **Selectable ignored area** — only process centre portion area (to ignore camera, etc.)
 
 [^3]: That I have tried (e.g., those in reference section).
-[^4]: Miavisc at 7:20 min. vs [binh234/video2slides](https://github.com/binh234/video2slides) at 22:08 min. Tested on Macbook Air M2, 512 GB SSD, 16 GM memory using 1280x720 @ 60fps, mp4, 1:11 hr lecture. With GMG algorithm, no skip frames.
+[^4]: Miavisc at 6:30 min. vs [binh234/video2slides](https://github.com/binh234/video2slides) at 22:08 min. Tested on Macbook Air M2, 512 GB SSD, 16 GM memory using 1280x720 @ 60fps, mp4, 1:11 hr lecture. With GMG algorithm, no skip frames.
 [^5]: Overall, results from both programs are very usable without any significant difference (extra or missing slides here and there). Both requires some further manual processing (e.g., delete residual duplications). Note that this evaluation is **SUBJECTIVE** to the creator of this program and thus should be taken with a grain of salt.
 
 This project is inspired by [binh234/video2slides](https://github.com/binh234/video2slides) and a lot of reference are taken from this work.
@@ -77,12 +77,12 @@ Using GMG algorithm might give you somewhat better result but KKN is faster espe
 
 ### Using KNN Algorithm
 
-| Options                            | Execution time | Diff         |
-| ---------------------------------- | -------------- | ------------ |
+| Options                           | Execution time | Diff         |
+| --------------------------------- | -------------- | ------------ |
 | `--fast --knn --check_per_sec 0`  | 4:21 min       | Base         |
 | `--fast --knn --check_per_sec 10` | 2:26 min       | `-44.1%`     |
 | `--fast --knn --check_per_sec 5`  | 1:32 min       | `-64.8%`     |
-| ` --knn --check_per_sec 5`         | 6:10 min       | `+75.1%`[^2] |
+| ` --knn --check_per_sec 5`        | 6:10 min       | `+75.1%`[^2] |
 
 [^2]: vs. `--fast --knn --check_per_sec 5`
 
@@ -94,6 +94,13 @@ Using GMG algorithm might give you somewhat better result but KKN is faster espe
 | --------------------------------- | ------ | ------ | -------- |
 | `--fast --knn --check_per_sec 0`  | `7:22` | `6:17` | `-14.7%` |
 | `--fast --knn --check_per_sec 10` | `4:46` | `3:44` | `-21.7%` |
+
+**Update 2**: with even more optimization, now it is even faster!  
+
+| Test                             | Before | After  | Diff     |
+| -------------------------------- | ------ | ------ | -------- |
+| `--fast --check_per_sec 0`       | `7:20` | `6:30` | `-16.8%` |
+| `--fast --knn --check_per_sec 0` | `6:17` | `5:40` | `-19.1%` |
 
 ## Author
 
