@@ -6,7 +6,7 @@ Born out of my frustration, this tool will convert video of a lecture to pdf fil
 
 Key features includes:
 
-- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **3.6x faster**[^4] while producing comparable result[^5].
+- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **3.4x faster**[^4] while producing comparable result[^5].
 - [x] **Tunable similarity threshold** — so slightly different frame due to mouse movement / lazer pointers are not treated as different page
 - [x] **Selectable ignored area** — only process centre portion area (to ignore camera, etc.)
 
@@ -99,8 +99,8 @@ Using GMG algorithm might give you somewhat better result but KKN is faster espe
 
 | Test                             | Before | After  | Diff     |
 | -------------------------------- | ------ | ------ | -------- |
-| `--fast --check_per_sec 0`       | `7:20` | `6:30` | `-16.8%` |
-| `--fast --knn --check_per_sec 0` | `6:17` | `5:40` | `-19.1%` |
+| `--fast --check_per_sec 0`       | `7:20` | `6:30` | `-11.4%` |
+| `--fast --knn --check_per_sec 0` | `6:17` | `5:40` | `-9.8%` |
 
 ## Author
 
