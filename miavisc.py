@@ -6,15 +6,9 @@ from itertools import islice
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
-from img2pdf import convert
+from img2pdf import convert, get_fixed_dpi_layout_fun
 from imagehash import dhash, ImageHash
 from PIL import Image
-
-
-def frame_to_bytes(frame) -> BytesIO:
-    return BytesIO(
-        iio.imwrite("<bytes>", frame, plugin="pillow", extension=".jpg")
-    )
 
 
 def similar_prev_hashes(
@@ -96,8 +90,9 @@ def get_captured_indexes(
         fast_hash_threshold = int(max(1, hash_threshold/2))
         fast_hash_hist_size = int(max(1, hash_hist_size/2))
 
-        slide_bytes = frame_to_bytes(slide)
-        current_hash = dhash(Image.open(slide_bytes), hash_size=hash_size)
+        current_hash = dhash(Image.fromarray(slide), hash_size=hash_size)
+        # slide_bytes = frame_to_bytes(slide)
+        # current_hash = dhash(Image.open(slide_bytes), hash_size=hash_size)
 
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -124,7 +119,7 @@ def get_captured_indexes(
     # Always include 1st frame
     capture_indexes: list[int] = [0]
 
-    for index, frame in indexed_frames:
+    for i, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
         percent_non_zero = 100 * \
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
@@ -135,7 +130,7 @@ def get_captured_indexes(
             if not is_unique_hash(frame):
                 continue
             captured = True
-            capture_indexes.append(index)
+            capture_indexes.append(i)
 
         if captured and percent_non_zero >= min_threshold:
             captured = False
@@ -145,27 +140,31 @@ def get_captured_indexes(
     return capture_indexes
 
 
-def extract_indexes(input_path, indexes, fast) -> list[BytesIO]:
+def extract_indexes(
+    input_path,
+    indexes,
+    fast
+) -> list[BytesIO]:
     thread_type = "FRAME" if fast else "SLICE"
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         images = [
             vid.read(index=i, thread_type=thread_type, constant_framerate=fast)
             for i in tqdm(indexes, desc="Getting Images")
         ]
-    return [frame_to_bytes(img) for img in images]
+    return images
 
 
-def get_unique_indexes(
+def get_unique_bytes(
     slides,
     hash_size,
     hash_threshold,
-    hash_hist_size
+    hash_hist_size,
 ) -> list[int]:
     unique_indexes = []
     prev_hashes = []
 
     for i, slide in enumerate(tqdm(slides, desc="Removing dups  ")):
-        current_hash = dhash(Image.open(slide), hash_size=hash_size)
+        current_hash = dhash(Image.fromarray(slide), hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
             prev_hashes,
@@ -182,9 +181,18 @@ def get_unique_indexes(
     return unique_indexes
 
 
-def convert_to_pdf(output_path, slides, unique_indexes):
+def convert_to_pdf(output_path, slides, unique_indexes, dpi, final_extension):
+    def frame_to_bytes(frame) -> BytesIO:
+        return BytesIO(iio.imwrite(
+            "<bytes>", frame, plugin="pillow",
+            extension=final_extension
+        ))
+
     with open(output_path, "wb") as f:
-        f.write(convert([slides[i].getvalue() for i in unique_indexes]))
+        f.write(convert(
+            [frame_to_bytes(slides[i]).getvalue() for i in unique_indexes],
+            layout_fun=get_fixed_dpi_layout_fun((dpi, dpi))
+        ))
 
     print("Finished making PDF file.")
 
@@ -263,6 +271,16 @@ if __name__ == "__main__":
         type=str, default="0.25",
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
+    arg_parser.add_argument(
+        "--final_extension",
+        type=str, default=".png",
+        help="Extension of final images (default: '.png'). Use .jpg should be faster"
+    )
+    arg_parser.add_argument(
+        "--dpi",
+        type=int, default=300,
+        help="DPI of final slide. (Default 300)"
+    )
     args = arg_parser.parse_args()
 
     indexed_frames = get_indexed_frames(
@@ -287,12 +305,18 @@ if __name__ == "__main__":
     slides = extract_indexes(
         args.input,
         slides_indexes,
-        args.fast
+        args.fast,
     )
-    unique_indexes = get_unique_indexes(
+    unique_indexes = get_unique_bytes(
         slides,
         args.hash_size,
         args.hash_threshold,
         args.hash_hist_size
     )
-    convert_to_pdf(args.output, slides, unique_indexes)
+    convert_to_pdf(
+        args.output,
+        slides,
+        unique_indexes,
+        args.dpi,
+        args.final_extension
+    )
