@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Any
     from collections.abc import Iterable
-    from numpy import ndarray
+    import numpy
     from imagehash import ImageHash
 
-    type Frame = ndarray
+    type Frame = numpy.ndarray
 
 
 def similar_prev_hashes(
