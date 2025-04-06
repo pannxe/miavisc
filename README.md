@@ -20,7 +20,7 @@ To any professors out there, for the love of capybara and all is that holy in th
 
 ## Dependencies
 
-**Python 3.13** or newer
+**Python 3.10** or newer
 
 ```
 pip install opencv-contrib-python imagehash av img2pdf imageio tqdm

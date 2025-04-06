@@ -17,10 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Any
     from collections.abc import Iterable
-    import numpy
+    from numpy import ndarray as Frame
     from imagehash import ImageHash
-
-    type Frame = numpy.ndarray
 
 
 def similar_prev_hashes(
@@ -219,7 +217,7 @@ def convert_to_pdf(
         f.write(i2p.convert(unique_bytes_list))
 
 
-if __name__ == "__main__":
+def main():
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
     )
@@ -336,3 +334,6 @@ if __name__ == "__main__":
         unique_indexes,
         args.final_extension
     )
+
+if __name__ == "__main__":
+    main() 
