@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "miavisc"
+description = "Miavisc is a video → slide converter"
+version = "1.0.0"
+requires-python = ">= 3.10"
+dependencies = [
+    "opencv-contrib-python",
+    "imagehash",
+    "av", 
+    "img2pdf",
+    "imageio", 
+    "tqdm"
+]
+authors = [
+    {name = "Krit Patyarath", email = "kzt.patrix@gmail.com"}
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["slide", "lecture", "converter", "extract", "video"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Utilities",
+    "Programming Language :: Python :: 3"
+]
+
+[project.urls]
+Repository = "https://github.com/pannxe/miavisc.git"
+Issues = "https://github.com/pannxe/miavisc/issues"
+GitHub = "https://github.com/pannxe/miavisc"
+
+[project.scripts]
+miavisc = "miavisc:main"
