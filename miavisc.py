@@ -1,13 +1,26 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
 from argparse import ArgumentParser
 from math import ceil
-from collections.abc import Iterator
 from itertools import islice
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
 import img2pdf as i2p
-from imagehash import dhash, ImageHash
+from imagehash import dhash
 from PIL import Image
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Any
+    from collections.abc import Iterable
+    from numpy import ndarray
+    from imagehash import ImageHash
+
+    type Frame = ndarray
 
 
 def similar_prev_hashes(
@@ -16,7 +29,7 @@ def similar_prev_hashes(
     hash_threshold,
     hash_hist_size
 ) -> bool:
-    def in_hist_size(i):
+    def in_hist_size(i) -> bool:
         if not hash_hist_size:
             return True
         return i < hash_hist_size
@@ -35,28 +48,28 @@ def get_indexed_frames(
     check_per_sec: int,
     crop_zoom: str,
     scale: str,
-    fast: bool
-) -> Iterator:
-    metadata = iio.immeta(input_path, plugin="pyav")
-    fps, duration = metadata["fps"], metadata["duration"]
-
+    fast: bool,
+) -> Iterable[tuple[int, Frame]]:
+    metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
+    fps = metadata["fps"]
+    duration = metadata["duration"]
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
     n_frames = ceil(duration * fps / step)
 
     filters = [
         fil for opt, fil in (
-            (fast, ("scale", f"{scale}*in_w:{scale}*in_h")),
+            (scale, ("scale", f"{scale}*in_w:{scale}*in_h")),
+            (fast, ("format", "gray")),
             (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
         ) if opt
     ]
-
-    thread_type = "FRAME" if fast else "SLICE"
-
+    format_type = None if fast else "bgr24"
     indexed_frames = enumerate(iio.imiter(
         input_path,
         plugin="pyav",
-        thread_type=thread_type,
+        thread_type="FRAME",
         filter_sequence=filters,
+        format=format_type
     ))
 
     return tqdm(
@@ -67,18 +80,18 @@ def get_indexed_frames(
 
 
 def get_captured_indexes(
-    indexed_frames,
-    init_frames,
-    d_threshold,
-    max_threshold,
-    min_threshold,
-    knn,
-    fast,
-    hash_size,
-    hash_threshold,
-    hash_hist_size
+    indexed_frames: Iterable[tuple[int, Frame]],
+    init_frames: int,
+    d_threshold: float | None,
+    max_threshold: float,
+    min_threshold: float,
+    knn: bool,
+    fast: bool,
+    hash_size: int,
+    hash_threshold: int,
+    hash_hist_size: int
 ) -> list[int]:
-    prev_hashes: [ImageHash] = []
+    prev_hashes: list[ImageHash] = []
 
     def is_unique_hash(frame):
         # Only checking if `--fast` is on. This checking make running this portion of code
@@ -87,7 +100,7 @@ def get_captured_indexes(
             return True
 
         fast_hash_threshold = int(max(1, hash_threshold/2))
-        fast_hash_hist_size = int(max(1, hash_hist_size/2))
+        fast_hash_hist_size = int(max(1, hash_hist_size/1.5))
 
         current_hash = dhash(Image.fromarray(frame), hash_size=hash_size)
         is_unique = not similar_prev_hashes(
@@ -113,7 +126,7 @@ def get_captured_indexes(
     )
 
     # Always include 1st frame
-    capture_indexes: list[int] = [0]
+    capture_indexes = [0]
 
     for i, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
@@ -136,26 +149,29 @@ def get_captured_indexes(
     return capture_indexes
 
 
-def extract_indexes(input_path, indexes, fast):
-    thread_type = "FRAME" if fast else "SLICE"
+def extract_indexes(
+    input_path: str,
+    indexes: list[int],
+    fast: bool
+) -> list[Frame]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         images = [
-            vid.read(index=i, thread_type=thread_type, constant_framerate=fast)
+            vid.read(index=i, thread_type="FRAME", constant_framerate=fast)
             for i in tqdm(indexes, desc="Getting Images")
         ]
     return images
 
 
 def get_unique_indexes(
-    slides,
-    hash_size,
-    hash_threshold,
-    hash_hist_size,
+    slides: list[Frame],
+    hash_size: int,
+    hash_threshold: int,
+    hash_hist_size: int,
 ) -> list[int]:
-    unique_indexes = []
-    prev_hashes = []
+    unique_indexes: list[int] = []
+    prev_hashes: list[ImageHash] = []
 
-    for i, slide in enumerate(tqdm(slides, desc="Removing dups  ")):
+    for i, slide in enumerate(tqdm(slides, desc="Removing dups ")):
         current_hash = dhash(Image.fromarray(slide), hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -173,20 +189,34 @@ def get_unique_indexes(
     return unique_indexes
 
 
-def convert_to_pdf(output_path, slides, unique_indexes, dpi, final_extension):
+def convert_to_pdf(
+    output_path: str,
+    slides: list[Frame],
+    unique_indexes: list[int],
+    final_extension: str
+) -> None:
     def frame_to_bytes(frame) -> bytes:
+        kargs: dict[str, Any] = {"optimize": True}
+        if final_extension.lower() == "jpg":
+            kargs.update((
+                ("quality", 95),
+                ("progressive", True),
+                ("keep_rgb", True),
+                ("subsampling", 0)
+            ))
+
         return iio.imwrite(
             "<bytes>", frame, plugin="pillow",
-            extension=final_extension
+            extension=final_extension,
+            **kargs
         )
 
+    unique_bytes_list: list[bytes] = [
+        frame_to_bytes(slides[i])
+        for i in tqdm(unique_indexes, desc="Making PDF")
+    ]
     with open(output_path, "wb") as f:
-        f.write(i2p.convert(
-            [frame_to_bytes(slides[i]) for i in unique_indexes],
-            layout_fun=i2p.get_fixed_dpi_layout_fun((dpi, dpi))
-        ))
-
-    print("Finished making PDF file.")
+        f.write(i2p.convert(unique_bytes_list))
 
 
 if __name__ == "__main__":
@@ -266,23 +296,18 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "--final_extension",
         type=str, default=".png",
-        help="Extension of final images (default: '.png'). Use .jpg should be faster"
-    )
-    arg_parser.add_argument(
-        "--dpi",
-        type=int, default=300,
-        help="DPI of final slide. (Default 300)"
+        help="Extension of final images (default: '.png'). Use '.jpg' should give you smaller file"
     )
     args = arg_parser.parse_args()
 
-    indexed_frames = get_indexed_frames(
+    indexed_frames: Iterable[tuple[int, Frame]] = get_indexed_frames(
         args.input,
         args.check_per_sec,
         args.crop_zoom,
         args.process_scale,
         args.fast
     )
-    slides_indexes = get_captured_indexes(
+    slides_indexes: list[int] = get_captured_indexes(
         indexed_frames,
         args.init_frames,
         args.d_threshold,
@@ -294,12 +319,12 @@ if __name__ == "__main__":
         args.hash_threshold,
         args.hash_hist_size
     )
-    slides = extract_indexes(
+    slides: list[Frame] = extract_indexes(
         args.input,
         slides_indexes,
-        args.fast,
+        args.fast
     )
-    unique_indexes = get_unique_indexes(
+    unique_indexes: list[int] = get_unique_indexes(
         slides,
         args.hash_size,
         args.hash_threshold,
@@ -309,6 +334,5 @@ if __name__ == "__main__":
         args.output,
         slides,
         unique_indexes,
-        args.dpi,
         args.final_extension
     )
