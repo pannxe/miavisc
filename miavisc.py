@@ -1,6 +1,7 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
+
+__version__ = "1.0.0"
+__author__ = "Krit Patyarath"
 
 from argparse import ArgumentParser
 from math import ceil
@@ -8,15 +9,14 @@ from itertools import islice
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
-import img2pdf as i2p
 from imagehash import dhash
 from PIL import Image
 
 from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
     from typing import Any
     from collections.abc import Iterable
+    from PIL.Image import Image as Image_T
     from numpy import ndarray as Frame
     from imagehash import ImageHash
 
@@ -151,26 +151,28 @@ def extract_indexes(
     input_path: str,
     indexes: list[int],
     fast: bool
-) -> list[Frame]:
+) -> tuple[Image_T]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        images = [
-            vid.read(index=i, thread_type="FRAME", constant_framerate=fast)
-            for i in tqdm(indexes, desc="Getting Images")
+        return [Image.fromarray(
+            vid.read(
+                index=i,
+                thread_type="FRAME",
+                constant_framerate=fast
+            )) for i in tqdm(indexes, desc="Getting Images")
         ]
-    return images
 
 
-def get_unique_indexes(
-    slides: list[Frame],
+def get_unique_frames(
+    frames_bytes: list[bytes],
     hash_size: int,
     hash_threshold: int,
     hash_hist_size: int,
 ) -> list[int]:
-    unique_indexes: list[int] = []
+    unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for i, slide in enumerate(tqdm(slides, desc="Removing dups ")):
-        current_hash = dhash(Image.fromarray(slide), hash_size=hash_size)
+    for i, frame_bytes in enumerate(tqdm(frames_bytes, desc="Removing dups ")):
+        current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
             prev_hashes,
@@ -179,47 +181,37 @@ def get_unique_indexes(
         )
         if not is_unique:
             continue
-        unique_indexes.append(i)
+        unique_bytes_list.append(frame_bytes)
         prev_hashes.append(current_hash)
 
-    print(f"\n{len(unique_indexes)} slides remain after postprocessing.\n")
+    print(f"\n{len(unique_bytes_list)} slides remain after postprocessing.\n")
 
-    return unique_indexes
+    return unique_bytes_list
 
 
 def convert_to_pdf(
     output_path: str,
-    slides: list[Frame],
-    unique_indexes: list[int],
-    final_extension: str
+    unique_bytes_list: list[Image_T],
 ) -> None:
-    def frame_to_bytes(frame) -> bytes:
-        kargs: dict[str, Any] = {"optimize": True}
-        if final_extension.lower() == "jpg":
-            kargs.update((
-                ("quality", 95),
-                ("progressive", True),
-                ("keep_rgb", True),
-                ("subsampling", 0)
-            ))
+    if not unique_bytes_list:
+        return
 
-        return iio.imwrite(
-            "<bytes>", frame, plugin="pillow",
-            extension=final_extension,
-            **kargs
-        )
-
-    unique_bytes_list: list[bytes] = [
-        frame_to_bytes(slides[i])
-        for i in tqdm(unique_indexes, desc="Making PDF")
-    ]
-    with open(output_path, "wb") as f:
-        f.write(i2p.convert(unique_bytes_list))
+    unique_bytes_list[0].save(
+        output_path,
+        "PDF",
+        resolution=100.0,
+        save_all=True,
+        append_images=tqdm(unique_bytes_list[1:], desc="Making PDF")
+    )
 
 
 def main():
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
+    )
+    arg_parser.add_argument(
+        "--version",
+        action="version", version="1.0.0"
     )
     arg_parser.add_argument(
         "--input",
@@ -291,11 +283,6 @@ def main():
         type=str, default="0.25",
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
-    arg_parser.add_argument(
-        "--final_extension",
-        type=str, default=".png",
-        help="Extension of final images (default: '.png'). Use '.jpg' should give you smaller file"
-    )
     args = arg_parser.parse_args()
 
     indexed_frames: Iterable[tuple[int, Frame]] = get_indexed_frames(
@@ -317,23 +304,19 @@ def main():
         args.hash_threshold,
         args.hash_hist_size
     )
-    slides: list[Frame] = extract_indexes(
+    candidate_frames = extract_indexes(
         args.input,
         slides_indexes,
         args.fast
     )
-    unique_indexes: list[int] = get_unique_indexes(
-        slides,
+    unique_bytes_list: list[bytes] = get_unique_frames(
+        candidate_frames,
         args.hash_size,
         args.hash_threshold,
         args.hash_hist_size
     )
-    convert_to_pdf(
-        args.output,
-        slides,
-        unique_indexes,
-        args.final_extension
-    )
+    convert_to_pdf(args.output, unique_bytes_list)
+
 
 if __name__ == "__main__":
-    main() 
+    main()
