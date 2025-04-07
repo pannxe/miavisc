@@ -5,14 +5,16 @@ __author__ = "Krit Patyarath"
 
 from argparse import ArgumentParser
 from math import ceil
-from itertools import islice
+from itertools import chain, tee, islice
 from functools import partial
+from operator import itemgetter
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
-from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
+from multiprocessing import Manager, cpu_count
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -21,6 +23,14 @@ if TYPE_CHECKING:
     from PIL.Image import Image as Image_T
     from numpy import ndarray as Frame
     from imagehash import ImageHash
+
+
+def update_tqdm(proc_lock, pb, n=1):
+    if proc_lock:
+         with proc_lock:
+            pb.update(n)
+    else:
+        pb.update(n)
 
 
 def similar_prev_hashes(
@@ -43,7 +53,7 @@ def similar_prev_hashes(
     return False
 
 
-def get_indexed_frames(
+def get_indexed_frames_iter(
     input_path: str,
     check_per_sec: int,
     crop_zoom: str,
@@ -52,8 +62,8 @@ def get_indexed_frames(
 ) -> Iterable[tuple[int, Frame]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
     fps = metadata["fps"]
-    duration = metadata["duration"]
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
+    duration = metadata["duration"]
     n_frames = ceil(duration * fps / step)
 
     filters = [
@@ -64,22 +74,38 @@ def get_indexed_frames(
         ) if opt
     ]
     format_type = None if fast else "bgr24"
-    indexed_frames = tenumerate(
-        iio.imiter(
-            input_path,
-            plugin="pyav",
-            thread_type="FRAME",
-            filter_sequence=filters,
-            format=format_type
-        ),
-        desc="Parsing Video ",
-        total=n_frames-1
-    )
 
-    return islice(indexed_frames, 1, None, step)
+    indexed_frames = enumerate(iio.imiter(
+        input_path,
+        plugin="pyav",
+        thread_type="FRAME",
+        filter_sequence=filters,
+        format=format_type
+    ))
+
+    return n_frames, islice(indexed_frames, None, None, step)
 
 
-def get_captured_indexes(
+def extract_indexes(
+    input_path: str,
+    indexes: list[int],
+    fast: bool,
+    include_index=False,
+    update_pb=False
+) -> tuple[Image_T]:
+    with iio.imopen(input_path, "r", plugin="pyav") as vid:
+        read_at = partial(vid.read, thread_type="FRAME",
+                          constant_framerate=fast)
+    
+        if include_index:
+            unique_list = [(i, Image.fromarray(read_at(index=i))) for i in indexes]
+            update_pb()
+            return unique_list
+        else:
+            return [Image.fromarray(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
+
+
+def get_candidate_frames(
     indexed_frames: Iterable[tuple[int, Frame]],
     init_frames: int,
     d_threshold: float | None,
@@ -89,7 +115,11 @@ def get_captured_indexes(
     fast: bool,
     hash_size: int,
     hash_threshold: int,
-    hash_hist_size: int
+    hash_hist_size: int,
+    input_path: str,
+    n_frame: int,
+    proc_label=0,
+    proc_lock=None,
 ) -> list[int]:
     prev_hashes: list[ImageHash] = []
 
@@ -114,7 +144,6 @@ def get_captured_indexes(
         return is_unique
 
     captured = False
-
     bg_subtrator = cv2.createBackgroundSubtractorKNN(
         history=init_frames,
         dist2Threshold=d_threshold if d_threshold else 100,
@@ -125,42 +154,80 @@ def get_captured_indexes(
         decisionThreshold=d_threshold if d_threshold else 0.75
     )
 
-    # Always include 1st frame
-    capture_indexes = [0]
+    # Always include 1st frame.
+    is_multiproc = isinstance(indexed_frames, list)
+    if is_multiproc:
+        capture_indexes = [indexed_frames[0][0]]
+        total = len(indexed_frames)
+    else:
+        # only here if single thread/process
+        capture_indexes = [0]
+        total = n_frame
+    leave = not is_multiproc
+    proc_text = f"#{proc_label}" if is_multiproc else ""
 
-    for i, frame in indexed_frames:
-        fg_mask = bg_subtrator.apply(frame)
-        percent_non_zero = 100 * \
-            cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
+    with tqdm(
+        desc="Parsing Video " + proc_text,
+        total=total+10,
+        leave=leave,
+    ) as pb:
+        for i, frame in indexed_frames:
+            update_tqdm(proc_lock, pb)
 
-        if percent_non_zero < max_threshold and not captured:
-            # with `--fast`, perform a rough hash
-            # so we don't have to extract so many frames later.
-            if not is_unique_hash(frame):
-                continue
-            captured = True
-            capture_indexes.append(i)
+            fg_mask = bg_subtrator.apply(frame)
+            percent_non_zero = 100 * \
+                cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
-        if captured and percent_non_zero >= min_threshold:
-            captured = False
+            if percent_non_zero < max_threshold and not captured:
+                # with `--fast`, perform a rough hash
+                # so we don't have to extract so many frames later.
+                if not is_unique_hash(frame):
+                    continue
+                captured = True
+                capture_indexes.append(i)
 
-    print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
+            if captured and percent_non_zero >= min_threshold:
+                captured = False
+        
+        update_pb = partial(update_tqdm, proc_lock, pb, 10)
+        return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc, update_pb=update_pb)
 
-    return capture_indexes
 
+def get_candidate_frames_concurrent(
+    get_candidates,
+    video_iter,
+    n_worker,
+    n_frame,
+    pool_executor
+):
+    with pool_executor(n_worker) as exe:
+        proc_lock = Manager().RLock()
 
-def extract_indexes(
-    input_path: str,
-    indexes: list[int],
-    fast: bool
-) -> tuple[Image_T]:
-    with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        read_at = partial(vid.read, thread_type="FRAME", constant_framerate=fast)
-        full_frames = [
-            Image.fromarray(read_at(index=i)) 
-            for i in tqdm(indexes, desc="Getting Images")
+        def slice_iter(i, e):
+            start = int(i * n_frame/n_worker)
+            end = min(int((i+1) * n_frame/n_worker), n_frame)
+            return islice(e, start, end)
+
+        vid_gen_trimmed = [
+            slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_worker))
         ]
-    return full_frames
+        with tqdm(desc="Finished Workers", position=0, total=n_worker) as pb:
+            results = [
+                exe.submit(
+                    partial(get_candidates, proc_label=i, proc_lock=proc_lock),
+                    list(e)
+                ) for i, e in enumerate(vid_gen_trimmed)
+            ]
+
+            unsorted_frames = []
+            for e in as_completed(results):
+                unsorted_frames.append(e.result())
+                pb.update()
+            sorted_frames = [
+                e[1] for e in sorted(chain.from_iterable(unsorted_frames), key=itemgetter(0))
+            ]
+        
+        return sorted_frames
 
 
 def get_unique_frames(
@@ -172,7 +239,7 @@ def get_unique_frames(
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for i, frame_bytes in tenumerate(frames_bytes, desc="Removing dups "):
+    for frame_bytes in tqdm(frames_bytes, desc="Removing dups ", position=998):
         current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -203,7 +270,8 @@ def convert_to_pdf(
         "PDF",
         resolution=100.0,
         save_all=True,
-        append_images=tqdm(unique_bytes_list[1:], desc="Making PDF")
+        append_images=tqdm(
+            unique_bytes_list[1:], desc="Making PDF", position=1000)
     )
 
 
@@ -211,19 +279,36 @@ def main():
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
     )
+
     arg_parser.add_argument(
-        "--version",
+        "-i", "--input",
+        type=str, required=True,
+        help="Path to input video file"
+    )
+    arg_parser.add_argument(
+        "-o", "--output",
+        type=str, required=True,
+        help="Path to input video file"
+    )
+    arg_parser.add_argument(
+        "-f", "--fast",
+        action="store_true", default=False,
+        help="Use various hacks to speed up the process (might affect the final result)."
+    )
+    arg_parser.add_argument(
+        "-v", "--version",
         action="version", version="1.0.0"
     )
     arg_parser.add_argument(
-        "--input",
-        type=str, required=True,
-        help="Path to input video file"
+        "-c", "--concurrent",
+        default=False,
+        action="store_true",
+        help="Enable concurrency"
     )
     arg_parser.add_argument(
-        "--output",
-        type=str, required=True,
-        help="Path to input video file"
+        "-k", "--knn",
+        default=False, action="store_true",
+        help="Use KNN instead of GMG"
     )
     arg_parser.add_argument(
         "--hash_size",
@@ -239,11 +324,6 @@ def main():
         "--hash_hist_size",
         type=int, default=5,
         help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
-    )
-    arg_parser.add_argument(
-        "--knn",
-        default=False, action="store_true",
-        help="Use KNN instead of GMG"
     )
     arg_parser.add_argument(
         "--max_threshold",
@@ -271,11 +351,6 @@ def main():
         help="How many frame to process in 1 sec. (0 = no skip frame)"
     )
     arg_parser.add_argument(
-        "--fast",
-        action="store_true", default=False,
-        help="Use various hacks to speed up the process (might affect the final result)."
-    )
-    arg_parser.add_argument(
         "--crop_zoom",
         type=str, default="",
         help="Only process inner <str> of the video. Recommened: '4/5'"
@@ -285,32 +360,56 @@ def main():
         type=str, default="0.25",
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
+    arg_parser.add_argument(
+        "--n_worker",
+        type=int, default=cpu_count(),
+        help="Numer of concurrent workers (default = CPU core)"
+    )
+    arg_parser.add_argument(
+        "--concurrent_method",
+        type=str, default="thread",
+        choices=["thread", "process"],
+        help="Method of concurrent (default = thread)"
+    )
+
     args = arg_parser.parse_args()
 
-    indexed_frames: Iterable[tuple[int, Frame]] = get_indexed_frames(
+    n_frame, video_iter = get_indexed_frames_iter(
         args.input,
         args.check_per_sec,
         args.crop_zoom,
         args.process_scale,
-        args.fast
-    )
-    slides_indexes: list[int] = get_captured_indexes(
-        indexed_frames,
-        args.init_frames,
-        args.d_threshold,
-        args.max_threshold,
-        args.min_threshold,
-        args.knn,
         args.fast,
-        args.hash_size,
-        args.hash_threshold,
-        args.hash_hist_size
     )
-    candidate_frames = extract_indexes(
-        args.input,
-        slides_indexes,
-        args.fast
+
+    get_candidates = partial(
+        get_candidate_frames,
+        init_frames=args.init_frames,
+        d_threshold=args.d_threshold,
+        max_threshold=args.max_threshold,
+        min_threshold=args.min_threshold,
+        knn=args.knn,
+        fast=args.fast,
+        hash_size=args.hash_size,
+        hash_threshold=args.hash_threshold,
+        hash_hist_size=args.hash_hist_size,
+        input_path=args.input,
+        n_frame=n_frame
     )
+    if args.concurrent:
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers. Initializing concurrency...\n")
+        if args.concurrent_method == "thread":
+            pool_executor = ThreadPoolExecutor 
+        else:
+            pool_executor = ProcessPoolExecutor
+        candidate_frames = get_candidate_frames_concurrent(
+            get_candidates, video_iter, args.n_worker, n_frame, pool_executor
+        )
+    else:
+        candidate_frames = get_candidates(video_iter)
+    
+    print(f"\nFound potentially {len(candidate_frames)} unique slides.\n")
+
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
         args.hash_size,
