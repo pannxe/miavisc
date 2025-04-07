@@ -1,17 +1,17 @@
 # Miavisc is a Video → Slide Converter
 
-![alt text](img/image.png)
+![Screenshot](image.png)
 
 Born out of my frustration, this tool will convert video of a lecture to pdf file at a **blazzingly fast speed** 🚀 (sarcasm intended).
 
 Key features includes:
 
-- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **> 10x faster**[^4] while producing comparable result[^5].
+- [x] **Blezzingly fast 🚀** — compare to other similar programs[^3], Miavisc is **> 11x faster**[^4] while producing comparable result[^5].
 - [x] **Tunable similarity threshold** — so slightly different frame due to mouse movement / lazer pointers are not treated as different page
 - [x] **Selectable ignored area** — only process centre portion area (to ignore camera, etc.)
 
 [^3]: That I have tried (e.g., those in reference section).
-[^4]: Miavisc at 2:11 min. vs [binh234/video2slides](https://github.com/binh234/video2slides) at 22:08 min. Tested on Macbook Air M2, 512 GB SSD, 16 GM memory using 1280x720 @ 30fps, mp4, 1:11 hr lecture. Using GMG algorithm, no skip frames.
+[^4]: Miavisc at 2:00 min. vs [binh234/video2slides](https://github.com/binh234/video2slides) at 22:08 min. Tested on Macbook Air M2, 512 GB SSD, 16 GM memory. Tested with 1280x720 @ 30fps, mp4, 1:11 hr lecture using GMG algorithm with no skip frames.
 [^5]:
     Overall, results from both programs are very usable without any significant difference (extra or missing slides here and there).
     Both requires some further manual processing (e.g., delete residual duplications).
@@ -71,8 +71,8 @@ Here's is what without `--fast` look like:
 
 | Options | Exec time | Diff    |
 | ------- | --------- | ------- |
-| `-fc`   | 2:11 min  | `+286%` |
-| `-fck`  | 1:25 min  | `+192%` |
+| `-fc`   | 2:00 min  | `+312%` |
+| `-fck`  | 1:17 min  | `+213%` |
 
 ## Author
 
