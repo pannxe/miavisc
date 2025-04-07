@@ -25,14 +25,6 @@ if TYPE_CHECKING:
     from imagehash import ImageHash
 
 
-def update_tqdm(proc_lock, pb, n=1):
-    if proc_lock:
-         with proc_lock:
-            pb.update(n)
-    else:
-        pb.update(n)
-
-
 def similar_prev_hashes(
     current_hash,
     prev_hashes,
@@ -91,16 +83,13 @@ def extract_indexes(
     indexes: list[int],
     fast: bool,
     include_index=False,
-    update_pb=False
 ) -> tuple[Image_T]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(vid.read, thread_type="FRAME",
                           constant_framerate=fast)
     
         if include_index:
-            unique_list = [(i, Image.fromarray(read_at(index=i))) for i in indexes]
-            update_pb()
-            return unique_list
+            return [(i, Image.fromarray(read_at(index=i))) for i in indexes]
         else:
             return [Image.fromarray(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
 
@@ -121,6 +110,13 @@ def get_candidate_frames(
     proc_label=0,
     proc_lock=None,
 ) -> list[int]:
+    def update_tqdm(proc_lock, pb, n=1):
+        if proc_lock:
+            with proc_lock:
+                pb.update(n)
+        else:
+            pb.update(n)
+
     prev_hashes: list[ImageHash] = []
 
     def is_unique_hash(frame):
@@ -168,7 +164,7 @@ def get_candidate_frames(
 
     with tqdm(
         desc="Parsing Video " + proc_text,
-        total=total+10,
+        total=total,
         leave=leave,
     ) as pb:
         for i, frame in indexed_frames:
@@ -188,9 +184,8 @@ def get_candidate_frames(
 
             if captured and percent_non_zero >= min_threshold:
                 captured = False
-        
-        update_pb = partial(update_tqdm, proc_lock, pb, 10)
-        return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc, update_pb=update_pb)
+
+        return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc)
 
 
 def get_candidate_frames_concurrent(
@@ -252,8 +247,6 @@ def get_unique_frames(
         unique_bytes_list.append(frame_bytes)
         prev_hashes.append(current_hash)
 
-    print(f"\n{len(unique_bytes_list)} slides remain after postprocessing.\n")
-
     return unique_bytes_list
 
 
@@ -279,7 +272,6 @@ def main():
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
     )
-
     arg_parser.add_argument(
         "-i", "--input",
         type=str, required=True,
@@ -371,7 +363,6 @@ def main():
         choices=["thread", "process"],
         help="Method of concurrent (default = thread)"
     )
-
     args = arg_parser.parse_args()
 
     n_frame, video_iter = get_indexed_frames_iter(
@@ -396,8 +387,9 @@ def main():
         input_path=args.input,
         n_frame=n_frame
     )
+    
     if args.concurrent:
-        print(f"Using {args.concurrent_method} method with {args.n_worker} workers. Initializing concurrency...\n")
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers. Initializing concurrency...")
         if args.concurrent_method == "thread":
             pool_executor = ThreadPoolExecutor 
         else:
@@ -408,14 +400,14 @@ def main():
     else:
         candidate_frames = get_candidates(video_iter)
     
-    print(f"\nFound potentially {len(candidate_frames)} unique slides.\n")
-
+    print(f"\tFound potentially {len(candidate_frames)} unique slides.")
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
         args.hash_size,
         args.hash_threshold,
         args.hash_hist_size
     )
+    print(f"\t{len(unique_bytes_list)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_bytes_list)
 
 
