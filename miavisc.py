@@ -389,7 +389,7 @@ def main():
     )
     
     if args.concurrent:
-        print(f"Using {args.concurrent_method} method with {args.n_worker} workers. Initializing concurrency...")
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n\tInitializing concurrency...")
         if args.concurrent_method == "thread":
             pool_executor = ThreadPoolExecutor 
         else:
@@ -409,7 +409,7 @@ def main():
     )
     print(f"\t{len(unique_bytes_list)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_bytes_list)
-
+    print("\tDone! 🔥 🚀")
 
 if __name__ == "__main__":
     main()
