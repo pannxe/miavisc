@@ -5,16 +5,17 @@ __author__ = "Krit Patyarath"
 
 from argparse import ArgumentParser
 from math import ceil
-from itertools import chain, tee
+from itertools import chain, tee, islice
 from functools import partial
+from operator import itemgetter
 import imageio.v3 as iio
 import cv2
-from tqdm import tqdm
+from tqdm.auto import tqdm, set_lock
 from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
-
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Manager, cpu_count
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -45,18 +46,17 @@ def similar_prev_hashes(
     return False
 
 
-def get_indexed_frames(
+def get_indexed_frames_iter(
     input_path: str,
     check_per_sec: int,
     crop_zoom: str,
     scale: str,
     fast: bool,
-    n_proc: int
 ) -> Iterable[tuple[int, Frame]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
     fps = metadata["fps"]
-    duration = metadata["duration"]
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
+    duration = metadata["duration"]
     n_frames = ceil(duration * fps / step)
 
     filters = [
@@ -68,42 +68,43 @@ def get_indexed_frames(
     ]
     format_type = None if fast else "bgr24"
 
-    cut_points = [int(i * duration/n_proc) for i in range(n_proc)]
-    video_iters = [
-         tenumerate(
-            iio.imiter(
-                input_path,
-                plugin="pyav",
-                thread_type="FRAME",
-                filter_sequence=filters + [
-                    ("trim", f"start={cut_points[i]}:end={cut_points[i+1] if i < n_proc - 1 else duration}")
-                ],
-                format=format_type
-            ),
-            start=int(i*(n_frames/n_proc)/step),
-            desc=f"Parsing (#{i}) ",
-            total=int((n_frames/n_proc)/step) - 1
-        ) for i in range(n_proc)
-    ]
+    indexed_frames = enumerate(iio.imiter(
+        input_path,
+        plugin="pyav",
+        thread_type="FRAME",
+        filter_sequence=filters,
+        format=format_type
+    ))
 
-    return video_iters
-
-    # indexed_frames = tenumerate(
-    #     iio.imiter(
-    #         input_path,
-    #         plugin="pyav",
-    #         thread_type="FRAME",
-    #         filter_sequence=filters,
-    #         format=format_type
-    #     ),
-    #     desc="Parsing Video ",
-    #     total=n_frames-1
-    # )
-
-    # return islice(indexed_frames, 1, None, step)
+    return n_frames, islice(indexed_frames, None, None, step)
 
 
-def get_captured_indexes(
+def extract_indexes(
+    input_path: str,
+    indexes: list[int],
+    fast: bool,
+    proc_label,
+    prog_pos,
+    proc_lock
+) -> tuple[Image_T]:
+    with iio.imopen(input_path, "r", plugin="pyav") as vid, tqdm(
+        desc=f"Getting Images #{proc_label}",
+        total=len(indexes),
+        position=prog_pos
+    ) as pb:
+        read_at = partial(vid.read, thread_type="FRAME",
+                          constant_framerate=fast)
+
+        full_frames = []
+        for i in indexes:
+            full_frames.append((i, Image.fromarray(read_at(index=i))))
+            with proc_lock:
+                pb.update()
+
+    return full_frames
+
+
+def get_candidate_frames(
     indexed_frames: Iterable[tuple[int, Frame]],
     init_frames: int,
     d_threshold: float | None,
@@ -113,7 +114,11 @@ def get_captured_indexes(
     fast: bool,
     hash_size: int,
     hash_threshold: int,
-    hash_hist_size: int
+    hash_hist_size: int,
+    proc_label: int,
+    prog_pos: int,
+    proc_lock,
+    input_path: str
 ) -> list[int]:
     prev_hashes: list[ImageHash] = []
 
@@ -150,43 +155,36 @@ def get_captured_indexes(
     )
 
     # Always include 1st frame
-    indexed_frames, first_ = tee(indexed_frames)
-    capture_indexes = [next(first_)[0]]
+    capture_indexes = [indexed_frames[0][0]]
 
-    for i, frame in indexed_frames:
-        fg_mask = bg_subtrator.apply(frame)
-        percent_non_zero = 100 * \
-            cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
+    with tqdm(
+        desc=f"Parsing Video #{proc_label}",
+        total=len(indexed_frames),
+        leave=False,
+        position=prog_pos
+    ) as pb:
+        for i, frame in indexed_frames:
+            with proc_lock:
+                pb.update(1)
 
-        if percent_non_zero < max_threshold and not captured:
-            # with `--fast`, perform a rough hash
-            # so we don't have to extract so many frames later.
-            if not is_unique_hash(frame):
-                continue
-            captured = True
-            capture_indexes.append(i)
+            fg_mask = bg_subtrator.apply(frame)
+            percent_non_zero = 100 * \
+                cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
-        if captured and percent_non_zero >= min_threshold:
-            captured = False
+            if percent_non_zero < max_threshold and not captured:
+                # with `--fast`, perform a rough hash
+                # so we don't have to extract so many frames later.
+                if not is_unique_hash(frame):
+                    continue
+                captured = True
+                capture_indexes.append(i)
+
+            if captured and percent_non_zero >= min_threshold:
+                captured = False
 
     # print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
 
-    return capture_indexes
-
-
-def extract_indexes(
-    input_path: str,
-    indexes: list[int],
-    fast: bool
-) -> tuple[Image_T]:
-    with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        read_at = partial(vid.read, thread_type="FRAME",
-                          constant_framerate=fast)
-        full_frames = [
-            Image.fromarray(read_at(index=i))
-            for i in tqdm(indexes, desc="Getting Images")
-        ]
-    return full_frames
+    return extract_indexes(input_path, capture_indexes, fast, proc_label, prog_pos, proc_lock)
 
 
 def get_unique_frames(
@@ -198,7 +196,7 @@ def get_unique_frames(
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for i, frame_bytes in tenumerate(frames_bytes, desc="Removing dups "):
+    for i, frame_bytes in tenumerate(frames_bytes, desc="Removing dups ", position=998):
         current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -229,7 +227,8 @@ def convert_to_pdf(
         "PDF",
         resolution=100.0,
         save_all=True,
-        append_images=tqdm(unique_bytes_list[1:], desc="Making PDF")
+        append_images=tqdm(
+            unique_bytes_list[1:], desc="Making PDF", position=1000)
     )
 
 
@@ -237,104 +236,121 @@ def main():
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
     )
-    arg_parser.add_argument(
-        "--version",
-        action="version", version="1.0.0"
-    )
-    arg_parser.add_argument(
-        "--input",
-        type=str, required=True,
-        help="Path to input video file"
-    )
-    arg_parser.add_argument(
-        "--output",
-        type=str, required=True,
-        help="Path to input video file"
-    )
-    arg_parser.add_argument(
-        "--hash_size",
-        type=int, default=12,
-        help="Hash size. Default = 12."
-    )
-    arg_parser.add_argument(
-        "--hash_threshold",
-        type=int, default=4,
-        help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
-    )
-    arg_parser.add_argument(
-        "--hash_hist_size",
-        type=int, default=5,
-        help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
-    )
-    arg_parser.add_argument(
-        "--knn",
-        default=False, action="store_true",
-        help="Use KNN instead of GMG"
-    )
-    arg_parser.add_argument(
-        "--max_threshold",
-        type=float, default=0.15,
-        help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
-    )
-    arg_parser.add_argument(
-        "--min_threshold",
-        type=float, default=0.01,
-        help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
-    )
-    arg_parser.add_argument(
-        "--d_threshold",
-        type=float, default=None,
-        help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
-    )
-    arg_parser.add_argument(
-        "--init_frames",
-        type=int, default=15,
-        help="Number of initialization frames for GMG. (default = 15)"
-    )
-    arg_parser.add_argument(
-        "--check_per_sec",
-        type=int, default=0,
-        help="How many frame to process in 1 sec. (0 = no skip frame)"
-    )
-    arg_parser.add_argument(
-        "--fast",
-        action="store_true", default=False,
-        help="Use various hacks to speed up the process (might affect the final result)."
-    )
-    arg_parser.add_argument(
-        "--crop_zoom",
-        type=str, default="",
-        help="Only process inner <str> of the video. Recommened: '4/5'"
-    )
-    arg_parser.add_argument(
-        "--process_scale",
-        type=str, default="0.25",
-        help="Process at <num> times the original resolution. (default = 0.25)"
-    )
+
+    def add_args():
+        arg_parser.add_argument(
+            "--version",
+            action="version", version="1.0.0"
+        )
+        arg_parser.add_argument(
+            "--input",
+            type=str, required=True,
+            help="Path to input video file"
+        )
+        arg_parser.add_argument(
+            "--output",
+            type=str, required=True,
+            help="Path to input video file"
+        )
+        arg_parser.add_argument(
+            "--hash_size",
+            type=int, default=12,
+            help="Hash size. Default = 12."
+        )
+        arg_parser.add_argument(
+            "--hash_threshold",
+            type=int, default=4,
+            help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
+        )
+        arg_parser.add_argument(
+            "--hash_hist_size",
+            type=int, default=5,
+            help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
+        )
+        arg_parser.add_argument(
+            "--knn",
+            default=False, action="store_true",
+            help="Use KNN instead of GMG"
+        )
+        arg_parser.add_argument(
+            "--max_threshold",
+            type=float, default=0.15,
+            help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
+        )
+        arg_parser.add_argument(
+            "--min_threshold",
+            type=float, default=0.01,
+            help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
+        )
+        arg_parser.add_argument(
+            "--d_threshold",
+            type=float, default=None,
+            help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
+        )
+        arg_parser.add_argument(
+            "--init_frames",
+            type=int, default=15,
+            help="Number of initialization frames for GMG. (default = 15)"
+        )
+        arg_parser.add_argument(
+            "--check_per_sec",
+            type=int, default=0,
+            help="How many frame to process in 1 sec. (0 = no skip frame)"
+        )
+        arg_parser.add_argument(
+            "--fast",
+            action="store_true", default=False,
+            help="Use various hacks to speed up the process (might affect the final result)."
+        )
+        arg_parser.add_argument(
+            "--crop_zoom",
+            type=str, default="",
+            help="Only process inner <str> of the video. Recommened: '4/5'"
+        )
+        arg_parser.add_argument(
+            "--process_scale",
+            type=str, default="0.25",
+            help="Process at <num> times the original resolution. (default = 0.25)"
+        )
+
+    add_args()
     args = arg_parser.parse_args()
 
-    video_iters: Iterable[tuple[int, Frame]] = get_indexed_frames(
+    n_frame, video_iter = get_indexed_frames_iter(
         args.input,
         args.check_per_sec,
         args.crop_zoom,
         args.process_scale,
         args.fast,
-        n_proc=4
     )
 
-    # indexed_frames: Iterable[tuple[int, Frame]],
-    # init_frames: int,
-    # d_threshold: float | None,
-    # max_threshold: float,
-    # min_threshold: float,
-    # knn: bool,
-    # fast: bool,
-    # hash_size: int,
-    # hash_threshold: int,
-    # hash_hist_size: int
+    n_proc = cpu_count()
 
-    get_capture = partial(
-        get_captured_indexes,
+    # 8 process -> 2:40
+    # 16 process -> 2:17
+    # 32 process ->
+    # 64 --     -> 2:27
+    # 8 thread -> 2:36
+    # 32 threads -> 2:19
+    # 64 --     -> 2:19
+
+    # 8 process -> 16
+    # 16 process ->
+    # 32 process -> 16s
+    # 64 --     -> 17s
+    # 8 thread -> 15
+    # 32 threads -> 15
+    # 64 --     ->
+
+    # n_proc_ 16 -> 2:02
+    # n_thread 16 -> 2:03
+
+    with ThreadPoolExecutor(n_proc) as exe:
+        proc_manager = Manager()
+        proc_lock = proc_manager.RLock()
+
+        get_capture = partial(
+            get_candidate_frames,
             init_frames=args.init_frames,
             d_threshold=args.d_threshold,
             max_threshold=args.max_threshold,
@@ -343,31 +359,39 @@ def main():
             fast=args.fast,
             hash_size=args.hash_size,
             hash_threshold=args.hash_threshold,
-            hash_hist_size=args.hash_hist_size
-    )
-    with ProcessPoolExecutor() as exe:
-        results = [exe.submit(get_capture, list(e)) for e in video_iters]
-        slides_indexes = sorted(chain.from_iterable(e.result() for e in as_completed(results)))
-    
-    print(slides_indexes)
+            hash_hist_size=args.hash_hist_size,
+            proc_lock=proc_lock,
+            input_path=args.input
+        )
 
-    # slides_indexes: list[int] = get_captured_indexes(
-    #     indexed_frames,
-    #     args.init_frames,
-    #     args.d_threshold,
-    #     args.max_threshold,
-    #     args.min_threshold,
-    #     args.knn,
-    #     args.fast,
-    #     args.hash_size,
-    #     args.hash_threshold,
-    #     args.hash_hist_size
+        def slice_iter(i, e):
+            start = int(i * n_frame/n_proc)
+            end = min(int((i+1) * n_frame/n_proc), n_frame)
+            return islice(e, start, end)
+
+        vid_gen_trimmed = [
+            slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_proc))
+        ]
+        results = [
+            exe.submit(
+                partial(get_capture, proc_label=i, prog_pos=i),
+                list(e)
+            ) for i, e in enumerate(vid_gen_trimmed)
+        ]
+        candidate_frames = [
+            e[1] for e in sorted(
+                chain.from_iterable(
+                    e.result() for e in as_completed(results)
+                ),
+                key=itemgetter(0)
+            )
+        ]
+
+    # candidate_frames = extract_indexes(
+    #     args.input,
+    #     slides_indexes,
+    #     args.fast
     # )
-    candidate_frames = extract_indexes(
-        args.input,
-        slides_indexes,
-        args.fast
-    )
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
         args.hash_size,
