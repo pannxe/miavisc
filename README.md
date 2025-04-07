@@ -1,6 +1,6 @@
 # Miavisc is a Video → Slide Converter
 
-![](image.png)
+![Screenshot](./img/image.png)
 
 Born out of my frustration, this tool will convert video of a lecture to pdf file at a **blazzingly fast speed** 🚀 (sarcasm intended).
 
