@@ -48,7 +48,8 @@ def similar_prev_hashes(
 def get_indexed_frames_iter(
     input_path: str,
     check_per_sec: int,
-    crop_zoom: str,
+    crop_width: str,
+    crop_heigh: str,
     scale: str,
     fast: bool,
 ) -> Iterable[tuple[int, Frame]]:
@@ -57,12 +58,16 @@ def get_indexed_frames_iter(
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
     duration = metadata["duration"]
     n_frames = ceil(duration * fps / step)
+    need_crop = crop_width or crop_heigh
+    if need_crop:
+        w_ratio = crop_width if crop_width else "1"
+        h_ratio = crop_heigh if crop_heigh else "1"
 
     filters = [
         fil for opt, fil in (
             (scale, ("scale", f"{scale}*in_w:{scale}*in_h")),
             (fast, ("format", "gray")),
-            (crop_zoom, ("crop", f"{crop_zoom}*in_w:{crop_zoom}*in_h")),
+            (need_crop, ("crop", f"{w_ratio}*in_w:{h_ratio}*in_h")),
         ) if opt
     ]
     format_type = None if fast else "bgr24"
@@ -343,9 +348,14 @@ def main():
         help="How many frame to process in 1 sec. (0 = no skip frame)"
     )
     arg_parser.add_argument(
-        "--crop_zoom",
-        type=str, default="",
-        help="Only process inner <str> of the video. Recommened: '4/5'"
+        "--crop_h",
+        type=str, default="1",
+        help="Only process inner <str> of the video (height). Recommened: '4/5'"
+    )
+    arg_parser.add_argument(
+        "--crop_w",
+        type=str, default="1",
+        help="Only process inner <str> of the video (width). Recommened: '4/5'"
     )
     arg_parser.add_argument(
         "--process_scale",
@@ -368,7 +378,8 @@ def main():
     n_frame, video_iter = get_indexed_frames_iter(
         args.input,
         args.check_per_sec,
-        args.crop_zoom,
+        args.crop_w,
+        args.crop_h,
         args.process_scale,
         args.fast,
     )
