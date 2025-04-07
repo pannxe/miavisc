@@ -5,7 +5,7 @@ __author__ = "Krit Patyarath"
 
 from argparse import ArgumentParser
 from math import ceil
-from itertools import islice
+from itertools import chain, tee
 from functools import partial
 import imageio.v3 as iio
 import cv2
@@ -13,6 +13,8 @@ from tqdm import tqdm
 from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -49,6 +51,7 @@ def get_indexed_frames(
     crop_zoom: str,
     scale: str,
     fast: bool,
+    n_proc: int
 ) -> Iterable[tuple[int, Frame]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
     fps = metadata["fps"]
@@ -64,19 +67,40 @@ def get_indexed_frames(
         ) if opt
     ]
     format_type = None if fast else "bgr24"
-    indexed_frames = tenumerate(
-        iio.imiter(
-            input_path,
-            plugin="pyav",
-            thread_type="FRAME",
-            filter_sequence=filters,
-            format=format_type
-        ),
-        desc="Parsing Video ",
-        total=n_frames-1
-    )
 
-    return islice(indexed_frames, 1, None, step)
+    cut_points = [int(i * duration/n_proc) for i in range(n_proc)]
+    video_iters = [
+         tenumerate(
+            iio.imiter(
+                input_path,
+                plugin="pyav",
+                thread_type="FRAME",
+                filter_sequence=filters + [
+                    ("trim", f"start={cut_points[i]}:end={cut_points[i+1] if i < n_proc - 1 else duration}")
+                ],
+                format=format_type
+            ),
+            start=int(i*(n_frames/n_proc)/step),
+            desc=f"Parsing (#{i}) ",
+            total=int((n_frames/n_proc)/step) - 1
+        ) for i in range(n_proc)
+    ]
+
+    return video_iters
+
+    # indexed_frames = tenumerate(
+    #     iio.imiter(
+    #         input_path,
+    #         plugin="pyav",
+    #         thread_type="FRAME",
+    #         filter_sequence=filters,
+    #         format=format_type
+    #     ),
+    #     desc="Parsing Video ",
+    #     total=n_frames-1
+    # )
+
+    # return islice(indexed_frames, 1, None, step)
 
 
 def get_captured_indexes(
@@ -126,7 +150,8 @@ def get_captured_indexes(
     )
 
     # Always include 1st frame
-    capture_indexes = [0]
+    indexed_frames, first_ = tee(indexed_frames)
+    capture_indexes = [next(first_)[0]]
 
     for i, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
@@ -144,7 +169,7 @@ def get_captured_indexes(
         if captured and percent_non_zero >= min_threshold:
             captured = False
 
-    print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
+    # print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
 
     return capture_indexes
 
@@ -155,9 +180,10 @@ def extract_indexes(
     fast: bool
 ) -> tuple[Image_T]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        read_at = partial(vid.read, thread_type="FRAME", constant_framerate=fast)
+        read_at = partial(vid.read, thread_type="FRAME",
+                          constant_framerate=fast)
         full_frames = [
-            Image.fromarray(read_at(index=i)) 
+            Image.fromarray(read_at(index=i))
             for i in tqdm(indexes, desc="Getting Images")
         ]
     return full_frames
@@ -287,25 +313,56 @@ def main():
     )
     args = arg_parser.parse_args()
 
-    indexed_frames: Iterable[tuple[int, Frame]] = get_indexed_frames(
+    video_iters: Iterable[tuple[int, Frame]] = get_indexed_frames(
         args.input,
         args.check_per_sec,
         args.crop_zoom,
         args.process_scale,
-        args.fast
-    )
-    slides_indexes: list[int] = get_captured_indexes(
-        indexed_frames,
-        args.init_frames,
-        args.d_threshold,
-        args.max_threshold,
-        args.min_threshold,
-        args.knn,
         args.fast,
-        args.hash_size,
-        args.hash_threshold,
-        args.hash_hist_size
+        n_proc=4
     )
+
+    # indexed_frames: Iterable[tuple[int, Frame]],
+    # init_frames: int,
+    # d_threshold: float | None,
+    # max_threshold: float,
+    # min_threshold: float,
+    # knn: bool,
+    # fast: bool,
+    # hash_size: int,
+    # hash_threshold: int,
+    # hash_hist_size: int
+
+    get_capture = partial(
+        get_captured_indexes,
+            init_frames=args.init_frames,
+            d_threshold=args.d_threshold,
+            max_threshold=args.max_threshold,
+            min_threshold=args.min_threshold,
+            knn=args.knn,
+            fast=args.fast,
+            hash_size=args.hash_size,
+            hash_threshold=args.hash_threshold,
+            hash_hist_size=args.hash_hist_size
+    )
+    with ProcessPoolExecutor() as exe:
+        results = [exe.submit(get_capture, list(e)) for e in video_iters]
+        slides_indexes = sorted(chain.from_iterable(e.result() for e in as_completed(results)))
+    
+    print(slides_indexes)
+
+    # slides_indexes: list[int] = get_captured_indexes(
+    #     indexed_frames,
+    #     args.init_frames,
+    #     args.d_threshold,
+    #     args.max_threshold,
+    #     args.min_threshold,
+    #     args.knn,
+    #     args.fast,
+    #     args.hash_size,
+    #     args.hash_threshold,
+    #     args.hash_hist_size
+    # )
     candidate_frames = extract_indexes(
         args.input,
         slides_indexes,
