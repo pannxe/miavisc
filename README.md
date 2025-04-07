@@ -71,8 +71,8 @@ Here's is what without `--fast` look like:
 
 | Options | Exec time | Diff    |
 | ------- | --------- | ------- |
-| `-fc`   | 2:00 min  | `+312%` |
-| `-fck`  | 1:17 min  | `+213%` |
+| `-fc`   | 2:00 min  | `-312%` |
+| `-fck`  | 1:17 min  | `-213%` |
 
 ## Author
 
