@@ -6,9 +6,11 @@ __author__ = "Krit Patyarath"
 from argparse import ArgumentParser
 from math import ceil
 from itertools import islice
+from functools import partial
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
+from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
 
@@ -62,19 +64,19 @@ def get_indexed_frames(
         ) if opt
     ]
     format_type = None if fast else "bgr24"
-    indexed_frames = enumerate(iio.imiter(
-        input_path,
-        plugin="pyav",
-        thread_type="FRAME",
-        filter_sequence=filters,
-        format=format_type
-    ))
-
-    return tqdm(
-        islice(indexed_frames, 1, None, step),
+    indexed_frames = tenumerate(
+        iio.imiter(
+            input_path,
+            plugin="pyav",
+            thread_type="FRAME",
+            filter_sequence=filters,
+            format=format_type
+        ),
         desc="Parsing Video ",
         total=n_frames-1
     )
+
+    return islice(indexed_frames, 1, None, step)
 
 
 def get_captured_indexes(
@@ -153,13 +155,12 @@ def extract_indexes(
     fast: bool
 ) -> tuple[Image_T]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        return [Image.fromarray(
-            vid.read(
-                index=i,
-                thread_type="FRAME",
-                constant_framerate=fast
-            )) for i in tqdm(indexes, desc="Getting Images")
+        read_at = partial(vid.read, thread_type="FRAME", constant_framerate=fast)
+        full_frames = [
+            Image.fromarray(read_at(index=i)) 
+            for i in tqdm(indexes, desc="Getting Images")
         ]
+    return full_frames
 
 
 def get_unique_frames(
@@ -171,7 +172,7 @@ def get_unique_frames(
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for i, frame_bytes in enumerate(tqdm(frames_bytes, desc="Removing dups ")):
+    for i, frame_bytes in tenumerate(frames_bytes, desc="Removing dups "):
         current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -194,6 +195,7 @@ def convert_to_pdf(
     unique_bytes_list: list[Image_T],
 ) -> None:
     if not unique_bytes_list:
+        print("No file was created.")
         return
 
     unique_bytes_list[0].save(
