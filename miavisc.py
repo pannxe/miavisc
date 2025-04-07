@@ -354,7 +354,7 @@ def main():
     )
     arg_parser.add_argument(
         "--n_worker",
-        type=int, default=cpu_count(),
+        type=int, default=cpu_count()*2,
         help="Numer of concurrent workers (default = CPU core)"
     )
     arg_parser.add_argument(
