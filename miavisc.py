@@ -281,10 +281,6 @@ def main():
     )
 
     arg_parser.add_argument(
-        "-v", "--version",
-        action="version", version="1.0.0"
-    )
-    arg_parser.add_argument(
         "-i", "--input",
         type=str, required=True,
         help="Path to input video file"
@@ -293,6 +289,26 @@ def main():
         "-o", "--output",
         type=str, required=True,
         help="Path to input video file"
+    )
+    arg_parser.add_argument(
+        "-f", "--fast",
+        action="store_true", default=False,
+        help="Use various hacks to speed up the process (might affect the final result)."
+    )
+    arg_parser.add_argument(
+        "-v", "--version",
+        action="version", version="1.0.0"
+    )
+    arg_parser.add_argument(
+        "-c", "--concurrent",
+        default=False,
+        action="store_true",
+        help="Enable concurrency"
+    )
+    arg_parser.add_argument(
+        "-k", "--knn",
+        default=False, action="store_true",
+        help="Use KNN instead of GMG"
     )
     arg_parser.add_argument(
         "--hash_size",
@@ -308,11 +324,6 @@ def main():
         "--hash_hist_size",
         type=int, default=5,
         help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
-    )
-    arg_parser.add_argument(
-        "-k", "--knn",
-        default=False, action="store_true",
-        help="Use KNN instead of GMG"
     )
     arg_parser.add_argument(
         "--max_threshold",
@@ -340,11 +351,6 @@ def main():
         help="How many frame to process in 1 sec. (0 = no skip frame)"
     )
     arg_parser.add_argument(
-        "-f", "--fast",
-        action="store_true", default=False,
-        help="Use various hacks to speed up the process (might affect the final result)."
-    )
-    arg_parser.add_argument(
         "--crop_zoom",
         type=str, default="",
         help="Only process inner <str> of the video. Recommened: '4/5'"
@@ -358,12 +364,6 @@ def main():
         "--n_worker",
         type=int, default=cpu_count(),
         help="Numer of concurrent workers (default = CPU core)"
-    )
-    arg_parser.add_argument(
-        "-c", "--concurrent",
-        default=False,
-        action="store_true",
-        help="Enable concurrency"
     )
     arg_parser.add_argument(
         "--concurrent_method",
