@@ -11,7 +11,6 @@ from operator import itemgetter
 import imageio.v3 as iio
 import cv2
 from tqdm import tqdm
-from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
 from multiprocessing import Manager, cpu_count
@@ -91,12 +90,19 @@ def extract_indexes(
     input_path: str,
     indexes: list[int],
     fast: bool,
+    include_index=False,
+    update_pb=False
 ) -> tuple[Image_T]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(vid.read, thread_type="FRAME",
                           constant_framerate=fast)
     
-        return [(i, Image.fromarray(read_at(index=i))) for i in indexes]
+        if include_index:
+            unique_list = [(i, Image.fromarray(read_at(index=i))) for i in indexes]
+            update_pb()
+            return unique_list
+        else:
+            return [Image.fromarray(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
 
 
 def get_candidate_frames(
@@ -113,7 +119,6 @@ def get_candidate_frames(
     input_path: str,
     n_frame: int,
     proc_label=0,
-    prog_pos=0,
     proc_lock=None,
 ) -> list[int]:
     prev_hashes: list[ImageHash] = []
@@ -150,19 +155,21 @@ def get_candidate_frames(
     )
 
     # Always include 1st frame.
-    if isinstance(indexed_frames, list):
+    is_multiproc = isinstance(indexed_frames, list)
+    if is_multiproc:
         capture_indexes = [indexed_frames[0][0]]
         total = len(indexed_frames)
     else:
         # only here if single thread/process
         capture_indexes = [0]
         total = n_frame
+    leave = not is_multiproc
+    proc_text = f"#{proc_label}" if is_multiproc else ""
 
     with tqdm(
-        desc=f"Parsing Video #{proc_label}",
-        total=total,
-        leave=False,
-        # position=prog_pos
+        desc="Parsing Video " + proc_text,
+        total=total+10,
+        leave=leave,
     ) as pb:
         for i, frame in indexed_frames:
             update_tqdm(proc_lock, pb)
@@ -181,8 +188,9 @@ def get_candidate_frames(
 
             if captured and percent_non_zero >= min_threshold:
                 captured = False
-
-        return extract_indexes(input_path, capture_indexes, fast)
+        
+        update_pb = partial(update_tqdm, proc_lock, pb, 10)
+        return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc, update_pb=update_pb)
 
 
 def get_candidate_frames_concurrent(
@@ -203,22 +211,23 @@ def get_candidate_frames_concurrent(
         vid_gen_trimmed = [
             slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_worker))
         ]
-        results = [
-            exe.submit(
-                partial(get_candidates, proc_label=i,
-                        prog_pos=i, proc_lock=proc_lock),
-                list(e)
-            ) for i, e in enumerate(vid_gen_trimmed)
-        ]
-        candidate_frames = [
-            e[1] for e in sorted(
-                chain.from_iterable(
-                    e.result() for e in tqdm(as_completed(results), desc="Parsing (Total)", position=0, total=n_worker)
-                ),
-                key=itemgetter(0)
-            )
-        ]
-        return candidate_frames
+        with tqdm(desc="Finished Workers", position=0, total=n_worker) as pb:
+            results = [
+                exe.submit(
+                    partial(get_candidates, proc_label=i, proc_lock=proc_lock),
+                    list(e)
+                ) for i, e in enumerate(vid_gen_trimmed)
+            ]
+
+            unsorted_frames = []
+            for e in as_completed(results):
+                unsorted_frames.append(e.result())
+                pb.update()
+            sorted_frames = [
+                e[1] for e in sorted(chain.from_iterable(unsorted_frames), key=itemgetter(0))
+            ]
+        
+        return sorted_frames
 
 
 def get_unique_frames(
@@ -230,7 +239,7 @@ def get_unique_frames(
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for i, frame_bytes in tenumerate(frames_bytes, desc="Removing dups ", position=998):
+    for frame_bytes in tqdm(frames_bytes, desc="Removing dups ", position=998):
         current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -301,7 +310,7 @@ def main():
         help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
     )
     arg_parser.add_argument(
-        "--knn",
+        "-k", "--knn",
         default=False, action="store_true",
         help="Use KNN instead of GMG"
     )
@@ -331,7 +340,7 @@ def main():
         help="How many frame to process in 1 sec. (0 = no skip frame)"
     )
     arg_parser.add_argument(
-        "--fast",
+        "-f", "--fast",
         action="store_true", default=False,
         help="Use various hacks to speed up the process (might affect the final result)."
     )
@@ -351,7 +360,7 @@ def main():
         help="Numer of concurrent workers (default = CPU core)"
     )
     arg_parser.add_argument(
-        "--concurrent",
+        "-c", "--concurrent",
         default=False,
         action="store_true",
         help="Enable concurrency"
@@ -398,6 +407,8 @@ def main():
         )
     else:
         candidate_frames = get_candidates(video_iter)
+    
+    print(f"\nFound potentially {len(candidate_frames)} unique slides.\n")
 
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
