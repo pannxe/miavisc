@@ -10,7 +10,7 @@ from functools import partial
 from operator import itemgetter
 import imageio.v3 as iio
 import cv2
-from tqdm.auto import tqdm, set_lock
+from tqdm import tqdm
 from tqdm.contrib import tenumerate
 from imagehash import dhash
 from PIL import Image
@@ -24,6 +24,14 @@ if TYPE_CHECKING:
     from PIL.Image import Image as Image_T
     from numpy import ndarray as Frame
     from imagehash import ImageHash
+
+
+def update_tqdm(proc_lock, pb, n=1):
+    if proc_lock:
+         with proc_lock:
+            pb.update(n)
+    else:
+        pb.update(n)
 
 
 def similar_prev_hashes(
@@ -83,25 +91,12 @@ def extract_indexes(
     input_path: str,
     indexes: list[int],
     fast: bool,
-    proc_label,
-    prog_pos,
-    proc_lock
 ) -> tuple[Image_T]:
-    with iio.imopen(input_path, "r", plugin="pyav") as vid, tqdm(
-        desc=f"Getting Images #{proc_label}",
-        total=len(indexes),
-        position=prog_pos
-    ) as pb:
+    with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(vid.read, thread_type="FRAME",
                           constant_framerate=fast)
-
-        full_frames = []
-        for i in indexes:
-            full_frames.append((i, Image.fromarray(read_at(index=i))))
-            with proc_lock:
-                pb.update()
-
-    return full_frames
+    
+        return [(i, Image.fromarray(read_at(index=i))) for i in indexes]
 
 
 def get_candidate_frames(
@@ -115,10 +110,11 @@ def get_candidate_frames(
     hash_size: int,
     hash_threshold: int,
     hash_hist_size: int,
-    proc_label: int,
-    prog_pos: int,
-    proc_lock,
-    input_path: str
+    input_path: str,
+    n_frame: int,
+    proc_label=0,
+    prog_pos=0,
+    proc_lock=None,
 ) -> list[int]:
     prev_hashes: list[ImageHash] = []
 
@@ -143,7 +139,6 @@ def get_candidate_frames(
         return is_unique
 
     captured = False
-
     bg_subtrator = cv2.createBackgroundSubtractorKNN(
         history=init_frames,
         dist2Threshold=d_threshold if d_threshold else 100,
@@ -154,18 +149,23 @@ def get_candidate_frames(
         decisionThreshold=d_threshold if d_threshold else 0.75
     )
 
-    # Always include 1st frame
-    capture_indexes = [indexed_frames[0][0]]
+    # Always include 1st frame.
+    if isinstance(indexed_frames, list):
+        capture_indexes = [indexed_frames[0][0]]
+        total = len(indexed_frames)
+    else:
+        # only here if single thread/process
+        capture_indexes = [0]
+        total = n_frame
 
     with tqdm(
         desc=f"Parsing Video #{proc_label}",
-        total=len(indexed_frames),
+        total=total,
         leave=False,
-        position=prog_pos
+        # position=prog_pos
     ) as pb:
         for i, frame in indexed_frames:
-            with proc_lock:
-                pb.update(1)
+            update_tqdm(proc_lock, pb)
 
             fg_mask = bg_subtrator.apply(frame)
             percent_non_zero = 100 * \
@@ -182,9 +182,43 @@ def get_candidate_frames(
             if captured and percent_non_zero >= min_threshold:
                 captured = False
 
-    # print(f"\nFound potentially {len(capture_indexes)} unique slides.\n")
+        return extract_indexes(input_path, capture_indexes, fast)
 
-    return extract_indexes(input_path, capture_indexes, fast, proc_label, prog_pos, proc_lock)
+
+def get_candidate_frames_concurrent(
+    get_candidates,
+    video_iter,
+    n_worker,
+    n_frame,
+    pool_executor
+):
+    with pool_executor(n_worker) as exe:
+        proc_lock = Manager().RLock()
+
+        def slice_iter(i, e):
+            start = int(i * n_frame/n_worker)
+            end = min(int((i+1) * n_frame/n_worker), n_frame)
+            return islice(e, start, end)
+
+        vid_gen_trimmed = [
+            slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_worker))
+        ]
+        results = [
+            exe.submit(
+                partial(get_candidates, proc_label=i,
+                        prog_pos=i, proc_lock=proc_lock),
+                list(e)
+            ) for i, e in enumerate(vid_gen_trimmed)
+        ]
+        candidate_frames = [
+            e[1] for e in sorted(
+                chain.from_iterable(
+                    e.result() for e in tqdm(as_completed(results), desc="Parsing (Total)", position=0, total=n_worker)
+                ),
+                key=itemgetter(0)
+            )
+        ]
+        return candidate_frames
 
 
 def get_unique_frames(
@@ -237,83 +271,98 @@ def main():
         description="Miavisc is a video to slide converter.",
     )
 
-    def add_args():
-        arg_parser.add_argument(
-            "--version",
-            action="version", version="1.0.0"
-        )
-        arg_parser.add_argument(
-            "--input",
-            type=str, required=True,
-            help="Path to input video file"
-        )
-        arg_parser.add_argument(
-            "--output",
-            type=str, required=True,
-            help="Path to input video file"
-        )
-        arg_parser.add_argument(
-            "--hash_size",
-            type=int, default=12,
-            help="Hash size. Default = 12."
-        )
-        arg_parser.add_argument(
-            "--hash_threshold",
-            type=int, default=4,
-            help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
-        )
-        arg_parser.add_argument(
-            "--hash_hist_size",
-            type=int, default=5,
-            help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
-        )
-        arg_parser.add_argument(
-            "--knn",
-            default=False, action="store_true",
-            help="Use KNN instead of GMG"
-        )
-        arg_parser.add_argument(
-            "--max_threshold",
-            type=float, default=0.15,
-            help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
-        )
-        arg_parser.add_argument(
-            "--min_threshold",
-            type=float, default=0.01,
-            help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
-        )
-        arg_parser.add_argument(
-            "--d_threshold",
-            type=float, default=None,
-            help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
-        )
-        arg_parser.add_argument(
-            "--init_frames",
-            type=int, default=15,
-            help="Number of initialization frames for GMG. (default = 15)"
-        )
-        arg_parser.add_argument(
-            "--check_per_sec",
-            type=int, default=0,
-            help="How many frame to process in 1 sec. (0 = no skip frame)"
-        )
-        arg_parser.add_argument(
-            "--fast",
-            action="store_true", default=False,
-            help="Use various hacks to speed up the process (might affect the final result)."
-        )
-        arg_parser.add_argument(
-            "--crop_zoom",
-            type=str, default="",
-            help="Only process inner <str> of the video. Recommened: '4/5'"
-        )
-        arg_parser.add_argument(
-            "--process_scale",
-            type=str, default="0.25",
-            help="Process at <num> times the original resolution. (default = 0.25)"
-        )
+    arg_parser.add_argument(
+        "-v", "--version",
+        action="version", version="1.0.0"
+    )
+    arg_parser.add_argument(
+        "-i", "--input",
+        type=str, required=True,
+        help="Path to input video file"
+    )
+    arg_parser.add_argument(
+        "-o", "--output",
+        type=str, required=True,
+        help="Path to input video file"
+    )
+    arg_parser.add_argument(
+        "--hash_size",
+        type=int, default=12,
+        help="Hash size. Default = 12."
+    )
+    arg_parser.add_argument(
+        "--hash_threshold",
+        type=int, default=4,
+        help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
+    )
+    arg_parser.add_argument(
+        "--hash_hist_size",
+        type=int, default=5,
+        help="Process at <num> times the original resolution. (default = 5; 0 = unlimited)"
+    )
+    arg_parser.add_argument(
+        "--knn",
+        default=False, action="store_true",
+        help="Use KNN instead of GMG"
+    )
+    arg_parser.add_argument(
+        "--max_threshold",
+        type=float, default=0.15,
+        help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
+    )
+    arg_parser.add_argument(
+        "--min_threshold",
+        type=float, default=0.01,
+        help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
+    )
+    arg_parser.add_argument(
+        "--d_threshold",
+        type=float, default=None,
+        help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
+    )
+    arg_parser.add_argument(
+        "--init_frames",
+        type=int, default=15,
+        help="Number of initialization frames for GMG. (default = 15)"
+    )
+    arg_parser.add_argument(
+        "--check_per_sec",
+        type=int, default=0,
+        help="How many frame to process in 1 sec. (0 = no skip frame)"
+    )
+    arg_parser.add_argument(
+        "--fast",
+        action="store_true", default=False,
+        help="Use various hacks to speed up the process (might affect the final result)."
+    )
+    arg_parser.add_argument(
+        "--crop_zoom",
+        type=str, default="",
+        help="Only process inner <str> of the video. Recommened: '4/5'"
+    )
+    arg_parser.add_argument(
+        "--process_scale",
+        type=str, default="0.25",
+        help="Process at <num> times the original resolution. (default = 0.25)"
+    )
+    arg_parser.add_argument(
+        "--n_worker",
+        type=int, default=cpu_count(),
+        help="Numer of concurrent workers (default = CPU core)"
+    )
+    arg_parser.add_argument(
+        "--concurrent",
+        default=False,
+        action="store_true",
+        help="Enable concurrency"
+    )
+    arg_parser.add_argument(
+        "--concurrent_method",
+        type=str, default="thread",
+        choices=["thread", "process"],
+        help="Method of concurrent (default = thread)"
+    )
 
-    add_args()
     args = arg_parser.parse_args()
 
     n_frame, video_iter = get_indexed_frames_iter(
@@ -324,74 +373,32 @@ def main():
         args.fast,
     )
 
-    n_proc = cpu_count()
-
-    # 8 process -> 2:40
-    # 16 process -> 2:17
-    # 32 process ->
-    # 64 --     -> 2:27
-    # 8 thread -> 2:36
-    # 32 threads -> 2:19
-    # 64 --     -> 2:19
-
-    # 8 process -> 16
-    # 16 process ->
-    # 32 process -> 16s
-    # 64 --     -> 17s
-    # 8 thread -> 15
-    # 32 threads -> 15
-    # 64 --     ->
-
-    # n_proc_ 16 -> 2:02
-    # n_thread 16 -> 2:03
-
-    with ThreadPoolExecutor(n_proc) as exe:
-        proc_manager = Manager()
-        proc_lock = proc_manager.RLock()
-
-        get_capture = partial(
-            get_candidate_frames,
-            init_frames=args.init_frames,
-            d_threshold=args.d_threshold,
-            max_threshold=args.max_threshold,
-            min_threshold=args.min_threshold,
-            knn=args.knn,
-            fast=args.fast,
-            hash_size=args.hash_size,
-            hash_threshold=args.hash_threshold,
-            hash_hist_size=args.hash_hist_size,
-            proc_lock=proc_lock,
-            input_path=args.input
+    get_candidates = partial(
+        get_candidate_frames,
+        init_frames=args.init_frames,
+        d_threshold=args.d_threshold,
+        max_threshold=args.max_threshold,
+        min_threshold=args.min_threshold,
+        knn=args.knn,
+        fast=args.fast,
+        hash_size=args.hash_size,
+        hash_threshold=args.hash_threshold,
+        hash_hist_size=args.hash_hist_size,
+        input_path=args.input,
+        n_frame=n_frame
+    )
+    if args.concurrent:
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers. Initializing concurrency...\n")
+        if args.concurrent_method == "thread":
+            pool_executor = ThreadPoolExecutor 
+        else:
+            pool_executor = ProcessPoolExecutor
+        candidate_frames = get_candidate_frames_concurrent(
+            get_candidates, video_iter, args.n_worker, n_frame, pool_executor
         )
+    else:
+        candidate_frames = get_candidates(video_iter)
 
-        def slice_iter(i, e):
-            start = int(i * n_frame/n_proc)
-            end = min(int((i+1) * n_frame/n_proc), n_frame)
-            return islice(e, start, end)
-
-        vid_gen_trimmed = [
-            slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_proc))
-        ]
-        results = [
-            exe.submit(
-                partial(get_capture, proc_label=i, prog_pos=i),
-                list(e)
-            ) for i, e in enumerate(vid_gen_trimmed)
-        ]
-        candidate_frames = [
-            e[1] for e in sorted(
-                chain.from_iterable(
-                    e.result() for e in as_completed(results)
-                ),
-                key=itemgetter(0)
-            )
-        ]
-
-    # candidate_frames = extract_indexes(
-    #     args.input,
-    #     slides_indexes,
-    #     args.fast
-    # )
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
         args.hash_size,
