@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.13"]
+        python-version: ["3.10", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -37,4 +37,5 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        python miavisc.py -v
+        python miavisc.py -fk -i test/react-in-5-minutes.mp4 -o test/react-in-5-minutes.pdf
+        python miavisc.py -fc -i test/react-in-5-minutes.mp4 -o test/react-in-5-minutes.pdf
