@@ -102,6 +102,7 @@ def get_candidate_frames(
     input_path: str,
     n_frame: int,
     proc_label=0,
+    enable_pb=True
 ) -> list[Image_T] | list[tuple[int, Image_T]]:
     prev_hashes: list[ImageHash] = []
 
@@ -149,7 +150,10 @@ def get_candidate_frames(
     leave = not is_multiproc
     proc_text = f"#{proc_label}" if is_multiproc else ""
 
-    for i, frame in tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=leave):
+    if enable_pb:
+        indexed_frames = tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=leave)
+
+    for i, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
         percent_non_zero = 100 * \
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
@@ -173,8 +177,14 @@ def get_candidate_frames_concurrent(
     video_iter: list[Frame],
     n_worker: int,
     n_frame: int,
-    pool_executor: ThreadPoolExecutor | ProcessPoolExecutor
+    c_method: str 
 ) -> list[Image_T]:
+    if c_method == "thread":
+        pool_executor = ThreadPoolExecutor
+        worker_pb = True
+    else:
+        pool_executor = ProcessPoolExecutor
+        worker_pb = False
     with pool_executor(n_worker) as exe:
         def slice_iter(i, e):
             start = int(i * n_frame/n_worker)
@@ -187,7 +197,7 @@ def get_candidate_frames_concurrent(
         print("Done")
         results = [
             exe.submit(
-                partial(get_candidates, proc_label=i+1),
+                partial(get_candidates, proc_label=i+1, enable_pb=worker_pb),
                 list(e)
             ) for i, e in enumerate(tqdm(vid_gen_trimmed, desc="Load Chunks"))
         ]
@@ -336,12 +346,12 @@ def main():
         help="Process at <num> times the original resolution. (default = 0.25)"
     )
     arg_parser.add_argument(
-        "--n_worker",
+        "--n_worker", "--c_num",
         type=int, default=cpu_count()*2,
         help="Numer of concurrent workers (default = CPU core)"
     )
     arg_parser.add_argument(
-        "--concurrent_method",
+        "--concurrent_method", "--c_type",
         type=str, default="thread",
         choices=["thread", "process"],
         help="Method of concurrent (default = thread)"
@@ -373,12 +383,8 @@ def main():
     if args.concurrent:
         print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n"
               "\tInitializing concurrency... ", end=" ")
-        if args.concurrent_method == "thread":
-            pool_executor = ThreadPoolExecutor
-        else:
-            pool_executor = ProcessPoolExecutor
         candidate_frames = get_candidate_frames_concurrent(
-            get_candidates, video_iter, args.n_worker, n_frame, pool_executor
+            get_candidates, video_iter, args.n_worker, n_frame, args.concurrent_method
         )
     else:
         candidate_frames = get_candidates(video_iter)
