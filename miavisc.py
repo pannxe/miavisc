@@ -53,6 +53,7 @@ def get_indexed_frames_iter(
     duration = metadata["duration"]
     n_frames = ceil(duration * fps / step)
 
+    # import as grayscale for faster result.
     filters = [("format", "gray")]
 
     if crop_width or crop_heigh:
@@ -280,12 +281,14 @@ def main():
     arg_parser.add_argument(
         "--hash_size",
         type=int, default=12,
-        help="Hash size. Default = 12."
+        help="Hash size. (default = 12)"
     )
     arg_parser.add_argument(
         "--hash_threshold",
-        type=int, default=4,
-        help="Threshold for final hash (default = 4). Also used to calculate fash hash threshold."
+        type=int, default=6,
+        help="Threshold for final hash (default = 6). "\
+             "Larger number means larger differences are required for image to be considered different "\
+             "(i.e., it become LESS sensitive to small changes)."
     )
     arg_parser.add_argument(
         "--hash_hist_size",
