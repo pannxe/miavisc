@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __author__ = "Krit Patyarath"
 
 from argparse import ArgumentParser
@@ -202,9 +202,7 @@ def get_candidate_frames_concurrent(
             ) for i, e in enumerate(tqdm(vid_gen_trimmed, desc="Load Chunks"))
         ]
         unsorted_frames = chain.from_iterable(
-            e.result() for e in tqdm(
-                as_completed(results),
-                desc="Finished Workers", total=n_worker, position=n_worker)
+            e.result() for e in as_completed(results)
         )
 
     sorted_frames = [
