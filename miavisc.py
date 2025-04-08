@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 
 
 def similar_prev_hashes(
-    current_hash,
-    prev_hashes,
-    hash_threshold,
-    hash_hist_size
+    current_hash: ImageHash,
+    prev_hashes: list[ImageHash],
+    hash_threshold: int,
+    hash_hist_size: int
 ) -> bool:
     def in_hist_size(i) -> bool:
         if not hash_hist_size:
@@ -52,7 +52,7 @@ def get_indexed_frames_iter(
     crop_heigh: str,
     scale: str,
     fast: bool,
-) -> Iterable[tuple[int, Frame]]:
+) -> tuple[int, Iterable[enumerate]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
     fps = metadata["fps"]
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
@@ -88,7 +88,7 @@ def extract_indexes(
     indexes: list[int],
     fast: bool,
     include_index=False,
-) -> tuple[Image_T]:
+) -> list[Image_T] | list[tuple[int, Image_T]]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(vid.read, thread_type="FRAME",
                           constant_framerate=fast)
@@ -113,8 +113,7 @@ def get_candidate_frames(
     input_path: str,
     n_frame: int,
     proc_label=0,
-    proc_lock=None,
-) -> list[int]:
+) -> list[Image_T] | list[tuple[int, Image_T]]:
     prev_hashes: list[ImageHash] = []
 
     def is_unique_hash(frame):
@@ -180,12 +179,12 @@ def get_candidate_frames(
 
 
 def get_candidate_frames_concurrent(
-    get_candidates,
-    video_iter,
-    n_worker,
-    n_frame,
-    pool_executor
-):
+    get_candidates: partial,
+    video_iter: list[Frame],
+    n_worker: int,
+    n_frame: int,
+    pool_executor: ThreadPoolExecutor | ProcessPoolExecutor
+) -> list[Image_T]:
     with pool_executor(n_worker) as exe:
         def slice_iter(i, e):
             start = int(i * n_frame/n_worker)
@@ -205,7 +204,7 @@ def get_candidate_frames_concurrent(
         unsorted_frames = chain.from_iterable(
             e.result() for e in tqdm(
                 as_completed(results),
-                desc="Finished Workers",  total=n_worker)
+                desc="Finished Workers", total=n_worker, position=n_worker)
         )
 
     sorted_frames = [
@@ -219,7 +218,7 @@ def get_unique_frames(
     hash_size: int,
     hash_threshold: int,
     hash_hist_size: int,
-) -> list[int]:
+) -> list[Image_T]:
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
