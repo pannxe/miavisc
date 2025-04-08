@@ -92,7 +92,7 @@ def extract_indexes(
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(vid.read, thread_type="FRAME",
                           constant_framerate=fast)
-    
+
         if include_index:
             return [(i, Image.fromarray(read_at(index=i))) for i in indexes]
         else:
@@ -115,13 +115,6 @@ def get_candidate_frames(
     proc_label=0,
     proc_lock=None,
 ) -> list[int]:
-    def update_tqdm(proc_lock, pb, n=1):
-        if proc_lock:
-            with proc_lock:
-                pb.update(n)
-        else:
-            pb.update(n)
-
     prev_hashes: list[ImageHash] = []
 
     def is_unique_hash(frame):
@@ -167,30 +160,23 @@ def get_candidate_frames(
     leave = not is_multiproc
     proc_text = f"#{proc_label}" if is_multiproc else ""
 
-    with tqdm(
-        desc="Parsing Video " + proc_text,
-        total=total,
-        leave=leave,
-    ) as pb:
-        for i, frame in indexed_frames:
-            update_tqdm(proc_lock, pb)
+    for i, frame in tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=False):
+        fg_mask = bg_subtrator.apply(frame)
+        percent_non_zero = 100 * \
+            cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
 
-            fg_mask = bg_subtrator.apply(frame)
-            percent_non_zero = 100 * \
-                cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
+        if percent_non_zero < max_threshold and not captured:
+            # with `--fast`, perform a rough hash
+            # so we don't have to extract so many frames later.
+            if not is_unique_hash(frame):
+                continue
+            captured = True
+            capture_indexes.append(i)
 
-            if percent_non_zero < max_threshold and not captured:
-                # with `--fast`, perform a rough hash
-                # so we don't have to extract so many frames later.
-                if not is_unique_hash(frame):
-                    continue
-                captured = True
-                capture_indexes.append(i)
+        if captured and percent_non_zero >= min_threshold:
+            captured = False
 
-            if captured and percent_non_zero >= min_threshold:
-                captured = False
-
-        return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc)
+    return extract_indexes(input_path, capture_indexes, fast, include_index=is_multiproc)
 
 
 def get_candidate_frames_concurrent(
@@ -201,8 +187,6 @@ def get_candidate_frames_concurrent(
     pool_executor
 ):
     with pool_executor(n_worker) as exe:
-        proc_lock = Manager().RLock()
-
         def slice_iter(i, e):
             start = int(i * n_frame/n_worker)
             end = min(int((i+1) * n_frame/n_worker), n_frame)
@@ -211,23 +195,23 @@ def get_candidate_frames_concurrent(
         vid_gen_trimmed = [
             slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_worker))
         ]
-        with tqdm(desc="Finished Workers", position=0, total=n_worker) as pb:
-            results = [
-                exe.submit(
-                    partial(get_candidates, proc_label=i, proc_lock=proc_lock),
-                    list(e)
-                ) for i, e in enumerate(vid_gen_trimmed)
-            ]
+        print("Done")
+        results = [
+            exe.submit(
+                partial(get_candidates, proc_label=i+1),
+                list(e)
+            ) for i, e in enumerate(tqdm(vid_gen_trimmed, desc="Load Chunks"))
+        ]
+        unsorted_frames = chain.from_iterable(
+            e.result() for e in tqdm(
+                as_completed(results),
+                desc="Finished Workers",  total=n_worker)
+        )
 
-            unsorted_frames = []
-            for e in as_completed(results):
-                unsorted_frames.append(e.result())
-                pb.update()
-            sorted_frames = [
-                e[1] for e in sorted(chain.from_iterable(unsorted_frames), key=itemgetter(0))
-            ]
-        
-        return sorted_frames
+    sorted_frames = [
+        e[1] for e in sorted(unsorted_frames, key=itemgetter(0))
+    ]
+    return sorted_frames
 
 
 def get_unique_frames(
@@ -398,11 +382,11 @@ def main():
         input_path=args.input,
         n_frame=n_frame
     )
-    
     if args.concurrent:
-        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n\tInitializing concurrency...")
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n"\
+                "\tInitializing concurrency... ", end=" ")
         if args.concurrent_method == "thread":
-            pool_executor = ThreadPoolExecutor 
+            pool_executor = ThreadPoolExecutor
         else:
             pool_executor = ProcessPoolExecutor
         candidate_frames = get_candidate_frames_concurrent(
@@ -410,7 +394,7 @@ def main():
         )
     else:
         candidate_frames = get_candidates(video_iter)
-    
+
     print(f"\tFound potentially {len(candidate_frames)} unique slides.")
     unique_bytes_list: list[bytes] = get_unique_frames(
         candidate_frames,
@@ -421,6 +405,7 @@ def main():
     print(f"\t{len(unique_bytes_list)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_bytes_list)
     print("\tDone! 🔥 🚀")
+
 
 if __name__ == "__main__":
     main()
