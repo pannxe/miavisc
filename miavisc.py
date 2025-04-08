@@ -31,14 +31,9 @@ def similar_prev_hashes(
     hash_threshold: int,
     hash_hist_size: int
 ) -> bool:
-    def in_hist_size(i) -> bool:
-        if not hash_hist_size:
-            return True
-        return i < hash_hist_size
-
     # similar hashes should be in the back, so search in reverse.
     for i, prev_hash in enumerate(reversed(prev_hashes)):
-        if not in_hist_size(i):
+        if hash_hist_size > 0 and i >= hash_hist_size:
             return False
         if prev_hash - current_hash <= hash_threshold:
             return True
@@ -51,33 +46,29 @@ def get_indexed_frames_iter(
     crop_width: str,
     crop_heigh: str,
     scale: str,
-    fast: bool,
 ) -> tuple[int, Iterable[enumerate]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
     fps = metadata["fps"]
     step = int(max(fps / check_per_sec, 1)) if check_per_sec else 1
     duration = metadata["duration"]
     n_frames = ceil(duration * fps / step)
-    need_crop = crop_width or crop_heigh
-    if need_crop:
+
+    filters = [("format", "gray")]
+
+    if crop_width or crop_heigh:
         w_ratio = crop_width if crop_width else "1"
         h_ratio = crop_heigh if crop_heigh else "1"
+        filters.append(("crop", f"{w_ratio}*in_w:{h_ratio}*in_h"))
 
-    filters = [
-        fil for opt, fil in (
-            (scale, ("scale", f"{scale}*in_w:{scale}*in_h")),
-            (fast, ("format", "gray")),
-            (need_crop, ("crop", f"{w_ratio}*in_w:{h_ratio}*in_h")),
-        ) if opt
-    ]
-    format_type = None if fast else "bgr24"
+    if scale:
+        filters.append(("scale", f"{scale}*in_w:{scale}*in_h"))
 
     indexed_frames = enumerate(iio.imiter(
         input_path,
         plugin="pyav",
         thread_type="FRAME",
         filter_sequence=filters,
-        format=format_type
+        format=None
     ))
 
     return n_frames, islice(indexed_frames, None, None, step)
@@ -90,13 +81,10 @@ def extract_indexes(
     include_index=False,
 ) -> list[Image_T] | list[tuple[int, Image_T]]:
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        read_at = partial(vid.read, thread_type="FRAME",
-                          constant_framerate=fast)
-
+        read_at = partial(vid.read, thread_type="FRAME", constant_framerate=fast)
         if include_index:
             return [(i, Image.fromarray(read_at(index=i))) for i in indexes]
-        else:
-            return [Image.fromarray(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
+        return [Image.fromarray(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
 
 
 def get_candidate_frames(
@@ -123,7 +111,8 @@ def get_candidate_frames(
             return True
 
         fast_hash_threshold = int(max(1, hash_threshold/2))
-        fast_hash_hist_size = int(max(1, hash_hist_size/1.5))
+        fast_hash_hist_size = int(
+            max(1, hash_hist_size/1.5)) if hash_hist_size else 0
 
         current_hash = dhash(Image.fromarray(frame), hash_size=hash_size)
         is_unique = not similar_prev_hashes(
@@ -220,7 +209,7 @@ def get_unique_frames(
     unique_bytes_list: list[Image_T] = []
     prev_hashes: list[ImageHash] = []
 
-    for frame_bytes in tqdm(frames_bytes, desc="Removing dups ", position=998):
+    for frame_bytes in tqdm(frames_bytes, desc="Removing dups "):
         current_hash = dhash(frame_bytes, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
@@ -250,7 +239,7 @@ def convert_to_pdf(
         resolution=100.0,
         save_all=True,
         append_images=tqdm(
-            unique_bytes_list[1:], desc="Making PDF", position=1000)
+            unique_bytes_list[1:], desc="Making PDF")
     )
 
 
@@ -362,7 +351,6 @@ def main():
         args.crop_w,
         args.crop_h,
         args.process_scale,
-        args.fast,
     )
 
     get_candidates = partial(
@@ -380,8 +368,8 @@ def main():
         n_frame=n_frame
     )
     if args.concurrent:
-        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n"\
-                "\tInitializing concurrency... ", end=" ")
+        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n"
+              "\tInitializing concurrency... ", end=" ")
         if args.concurrent_method == "thread":
             pool_executor = ThreadPoolExecutor
         else:
@@ -401,7 +389,7 @@ def main():
     )
     print(f"\t{len(unique_bytes_list)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_bytes_list)
-    
+
     # Windows somehow cannot display emoji.
     print("\tDone! 🔥 🚀" if os_name != "nt" else "\tDone!")
 
