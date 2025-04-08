@@ -13,7 +13,7 @@ import cv2
 from tqdm import tqdm
 from imagehash import dhash
 from PIL import Image
-from multiprocessing import Manager, cpu_count
+from multiprocessing import cpu_count
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
@@ -160,7 +160,7 @@ def get_candidate_frames(
     leave = not is_multiproc
     proc_text = f"#{proc_label}" if is_multiproc else ""
 
-    for i, frame in tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=False):
+    for i, frame in tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=leave):
         fg_mask = bg_subtrator.apply(frame)
         percent_non_zero = 100 * \
             cv2.countNonZero(fg_mask) / (1.0 * fg_mask.size)
