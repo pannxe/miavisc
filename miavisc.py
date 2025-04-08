@@ -13,7 +13,7 @@ import cv2
 from tqdm import tqdm
 from imagehash import dhash
 from PIL import Image
-from multiprocessing import cpu_count
+from os import cpu_count, name as os_name
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
@@ -403,7 +403,9 @@ def main():
     )
     print(f"\t{len(unique_bytes_list)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_bytes_list)
-    print("\tDone! 🔥 🚀")
+    
+    # Windows somehow cannot display emoji.
+    print("\tDone! 🔥 🚀" if os_name != "nt" else "\tDone!")
 
 
 if __name__ == "__main__":
