@@ -46,10 +46,8 @@ def similar_prev_hashes(
 def get_indexed_frames_iter(
     input_path: str,
     check_per_sec: int,
-    w_ratio: str,
-    h_ratio: str,
-    x_ratio: str,
-    y_ratio: str,
+    crop_str: str,
+    box_str: str,
     scale: str,
 ) -> tuple[int, Iterable[enumerate]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
@@ -59,10 +57,14 @@ def get_indexed_frames_iter(
     n_frames = ceil(duration * fps / step)
 
     filters = [
-        ("crop", f"{w_ratio}*in_w:{h_ratio}*in_h:{x_ratio}*in_w:{y_ratio}*in_h"),
         ("scale", f"{scale}*in_w:{scale}*in_h"),
+        ("drawbox", box_str),
+        ("crop", crop_str),
         ("format", "gray")
     ]
+    if not box_str:
+        filters.pop(1)
+    
     indexed_frames = enumerate(iio.imiter(
         input_path,
         plugin="pyav",
@@ -71,28 +73,6 @@ def get_indexed_frames_iter(
         format=None
     ))
     return n_frames, islice(indexed_frames, None, None, step)
-
-
-def get_frames_from_indexes(
-    input_path: str,
-    indexes: list[int],
-    fast: bool,
-    w_ratio: str,
-    h_ratio: str,
-    x_ratio: str,
-    y_ratio: str,
-    include_index=False,
-) -> list[Image] | list[tuple[int, Image]]:
-    with iio.imopen(input_path, "r", plugin="pyav") as vid:
-        read_at = partial(
-            vid.read, 
-            thread_type="FRAME",
-            filter_sequence=[("crop", f"{w_ratio}*in_w:{h_ratio}*in_h:{x_ratio}*in_w:{y_ratio}*in_h")],
-            constant_framerate=fast
-        )
-        if include_index:
-            return [(i, frame_to_image(read_at(index=i))) for i in indexes]
-        return [frame_to_image(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
 
 
 def get_candidate_frames(
@@ -217,6 +197,33 @@ def get_candidate_frames_concurrent(
         e[1] for e in sorted(unsorted_frames, key=itemgetter(0))
     ]
     return sorted_frames
+
+
+def get_frames_from_indexes(
+    input_path: str,
+    indexes: list[int],
+    fast: bool,
+    crop_str: str,
+    box_str: str,
+    include_index=False,
+) -> list[Image] | list[tuple[int, Image]]:
+    filters = [
+        ("drawbox", box_str),
+        ("crop", crop_str),
+    ]
+    if not box_str:
+        filters.pop(0)
+    
+    with iio.imopen(input_path, "r", plugin="pyav") as vid:
+        read_at = partial(
+            vid.read, 
+            thread_type="FRAME",
+            filter_sequence=filters,
+            constant_framerate=fast
+        )
+        if include_index:
+            return [(i, frame_to_image(read_at(index=i))) for i in indexes]
+        return [frame_to_image(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
 
 
 def get_unique_frames(
@@ -344,12 +351,27 @@ def main():
     arg_parser.add_argument(
         "--crop_h", "-H",
         type=str, default="0:1:0",
-        help="Top_Border:Content:Bottom_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
+        help="Top_Border:Content_Height:Bottom_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
     )
     arg_parser.add_argument(
         "--crop_w", "-W",
         type=str, default="0:1:0",
-        help="Left_Border:Content:Right_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
+        help="Left_Border:Content_Width:Right_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
+    )
+    arg_parser.add_argument(
+        "--box_h",
+        type=str, default=None,
+        help="Top_Margin:Box_Height:Bottom_Margin. Calculated in ratio so numbers do not have to be exactly match the source video. Applied before crop."
+    )
+    arg_parser.add_argument(
+        "--box_w",
+        type=str, default=None,
+        help="Left_Margin:Box_Width:Right_Margin. Calculated in ratio so numbers do not have to be exactly match the source video. Applied before crop."
+    )
+    arg_parser.add_argument(
+        "--box_color",
+        type=str, default="0xFFFFFF",
+        help="Color of the block, unproductive if --box_w and --box_h are unset. (default = 0xFFFFFF; i.e., white)"
     )
     arg_parser.add_argument(
         "--process_scale",
@@ -376,40 +398,48 @@ def main():
     args = arg_parser.parse_args()
 
     if not os.access(args.input, os.R_OK):
-        print(f"Error! Cannot access {args.input}")
-        return
+        raise FileNotFoundError(f"Error! Cannot access {args.input}")
     
     output_dir = os.path.dirname(args.output)
     if not os.access(output_dir, os.F_OK):
-        print(f"Error! Path {output_dir} does not exist.")
-        return
-    if os.path.exists(args.output) and not args.force:
-        print(f"Error! {args.output} already exists. To force replace, use '--force' or '-F' option")
-        return
-    if not os.access(output_dir, os.W_OK):
-        print(f"Error! Cannot write to {output_dir}.")
-        return
+        raise FileNotFoundError(f"Error! Path {output_dir} does not exist")
 
-    l_border, content_w, r_border = (
-        float(e) if e else 0 for e in args.crop_w.split(":")
-    )
-    t_border, content_h, b_border = (
-        float(e) if e else 0 for e in args.crop_h.split(":")
-    )
-    total_w = l_border + content_w + r_border
-    total_h = t_border + content_h + b_border
-    w_ratio = content_w / total_w
-    h_ratio = content_h / total_h
-    x_ratio = l_border / total_w
-    y_ratio = t_border / total_h
+    if os.path.exists(args.output) and not args.force:
+        raise FileExistsError(f"{args.output} already exists. To force replace, use '--force' or '-F' option")
+        
+    if not os.access(output_dir, os.W_OK):
+        raise PermissionError(f"Error! Cannot write to {output_dir}")
+    
+
+    def get_ffmpeg_pos_str(hs, ws):
+        l_border, content_w, r_border = (
+            f"({e})" if e else "0" for e in ws.split(":")
+        )
+        t_border, content_h, b_border = (
+            f"({e})" if e else "0" for e in hs.split(":")
+        )
+        if content_h == "0" or content_w == "0":
+            raise ValueError("Content/box height or width cannot be zero")
+        
+        total_w = f"({l_border}+{content_w}+{r_border})"
+        total_h = f"({t_border}+{content_h}+{b_border})"
+        w_ratio = f"{content_w}/{total_w}"
+        h_ratio =  f"{content_h}/{total_h}"
+        x_ratio = f"{l_border}/{total_w}"
+        y_ratio = f"{t_border}/{total_h}"
+        
+        return f"x={x_ratio}*in_w:y={y_ratio}*in_h:w={w_ratio}*in_w:h={h_ratio}*in_h"
+
+
+    crop_str = get_ffmpeg_pos_str(args.crop_h, args.crop_w)
+    box_str = (get_ffmpeg_pos_str(args.box_h, args.box_w) + f":c={args.box_color}@1.0:t=fill") \
+        if args.box_h and args.box_w else None
 
     n_frame, video_iter = get_indexed_frames_iter(
         args.input,
         args.check_per_sec,
-        w_ratio,
-        h_ratio,
-        x_ratio,
-        y_ratio,
+        crop_str,
+        box_str,
         args.process_scale,
     )
 
@@ -417,10 +447,8 @@ def main():
         get_frames_from_indexes,
         input_path=args.input,
         fast=args.fast,
-        w_ratio=w_ratio,
-        h_ratio=h_ratio,
-        x_ratio=x_ratio,
-        y_ratio=y_ratio,
+        box_str=box_str,
+        crop_str=crop_str,
     )
 
     get_candidates = partial(
