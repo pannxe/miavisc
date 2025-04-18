@@ -81,5 +81,5 @@ Here's is what without `--fast` look like:
 ## References
 
 - Kunal Dawn. (2023). **Build a Video to Slides Converter Application using the Power of Background Estimation and Frame Differencing in OpenCV**. _LearnOpenCV_. Accessed April 1st, 2025. [Link](https://learnopencv.com/video-to-slides-converter-using-background-subtraction/).
-- [binh234/video2slides](https://github.com/binh234/video2slides) — This project is inspired by this program and a lot of references are taken from this work.
+- [binh234/video2slides](https://github.com/binh234/video2slides) — Miavisc is inspired by this program and a lot of references are taken from this work.
   Any comparison to this program is purely educational and mean no offense to its author.
