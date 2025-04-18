@@ -1,38 +1,46 @@
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __author__ = "Krit Patyarath"
 
-from argparse import ArgumentParser
-from math import ceil
-from itertools import chain, tee, islice
-from functools import partial
-from operator import itemgetter
-import imageio.v3 as iio
-from cv2 import createBackgroundSubtractorKNN, countNonZero
-from cv2.bgsegm import createBackgroundSubtractorGMG
-from tqdm import tqdm
-from imagehash import dhash
-from PIL.Image import fromarray as frame_to_image
-from os import cpu_count, name as os_name
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from img2pdf import convert as to_pdf
 import os
-
+from argparse import ArgumentParser
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
+from functools import partial
+from itertools import chain, islice, starmap, tee
+from math import ceil
+from operator import itemgetter
+from os import cpu_count
+from os import name as os_name
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import imageio.v3 as iio
+from cv2 import countNonZero, createBackgroundSubtractorKNN
+from cv2.bgsegm import createBackgroundSubtractorGMG
+from imagehash import dhash
+from img2pdf import convert as img_to_pdf  # type: ignore
+from PIL.Image import fromarray as frame_to_image
+from tqdm import tqdm
+
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator, Sequence
     from typing import Any
-    from collections.abc import Iterable
-    from PIL.Image import Image
-    from numpy import ndarray as Frame
+
     from imagehash import ImageHash
+    from numpy import ndarray as Frame
+    from PIL.Image import Image
 
 
 def similar_prev_hashes(
     current_hash: ImageHash,
     prev_hashes: list[ImageHash],
     hash_threshold: int,
-    hash_hist_size: int
+    hash_hist_size: int,
 ) -> bool:
     # similar hashes should be in the back, so search in reverse.
     for i, prev_hash in enumerate(reversed(prev_hashes)):
@@ -47,7 +55,7 @@ def get_indexed_frames_iter(
     input_path: str,
     check_per_sec: int,
     crop_str: str,
-    box_str: str,
+    box_str: str | None,
     scale: str,
 ) -> tuple[int, Iterable[enumerate]]:
     metadata: dict[str, Any] = iio.immeta(input_path, plugin="pyav")
@@ -60,23 +68,23 @@ def get_indexed_frames_iter(
         ("scale", f"{scale}*in_w:{scale}*in_h"),
         ("drawbox", box_str),
         ("crop", crop_str),
-        ("format", "gray")
+        ("format", "gray"),
     ]
     if not box_str:
         filters.pop(1)
-    
+
     indexed_frames = enumerate(iio.imiter(
         input_path,
         plugin="pyav",
         thread_type="FRAME",
         filter_sequence=filters,
-        format=None
+        format=None,
     ))
-    return n_frames, islice(indexed_frames, None, None, step)
+    return n_frames, islice(indexed_frames, None, None, step) # type: ignore
 
 
 def get_candidate_frames(
-    indexed_frames: Iterable[tuple[int, Frame]],
+    indexed_frames: Sequence[tuple[int, Frame]],
     init_frames: int,
     d_threshold: float | None,
     max_threshold: float,
@@ -88,14 +96,14 @@ def get_candidate_frames(
     hash_hist_size: int,
     extract_indexes: partial,
     n_frame: int,
-    proc_label=0,
-    enable_pb=True
+    proc_label: int =0,
+    enable_pb: bool =True,
 ) -> list[Image] | list[tuple[int, Image]]:
     prev_hashes: list[ImageHash] = []
 
-    def is_unique_hash(frame):
+    def is_unique_hash(frame: Frame) -> bool:
         fast_hash_threshold = int(max(1, hash_threshold/2))
-        fast_hash_hist_size = int(max(1, hash_hist_size/1.5)
+        fast_hash_hist_size = int(max(1, hash_hist_size/1.5),
             ) if hash_hist_size else 0
 
         current_hash = dhash(frame_to_image(frame), hash_size=hash_size)
@@ -103,7 +111,7 @@ def get_candidate_frames(
             current_hash,
             prev_hashes,
             fast_hash_threshold,
-            fast_hash_hist_size
+            fast_hash_hist_size,
         )
         if is_unique:
             prev_hashes.append(current_hash)
@@ -113,12 +121,12 @@ def get_candidate_frames(
 
     bg_subtrator = createBackgroundSubtractorKNN(
         history=init_frames,
-        dist2Threshold=d_threshold if d_threshold else 100,
-        detectShadows=False
+        dist2Threshold=d_threshold or 100,
+        detectShadows=False,
     ) if knn else \
         createBackgroundSubtractorGMG(
         initializationFrames=init_frames,
-        decisionThreshold=d_threshold if d_threshold else 0.75
+        decisionThreshold=d_threshold or 0.75,
     )
 
     # Always include 1st frame.
@@ -134,7 +142,12 @@ def get_candidate_frames(
     proc_text = f"#{proc_label}" if is_multiproc else ""
 
     if enable_pb:
-        indexed_frames = tqdm(indexed_frames, desc="Parsing Video " + proc_text, total=total, leave=leave)
+        indexed_frames = tqdm(
+            indexed_frames,
+            desc="Parsing Video " + proc_text,
+            total=total,
+            leave=leave,
+        ) # type: ignore
 
     for i, frame in indexed_frames:
         fg_mask = bg_subtrator.apply(frame)
@@ -145,8 +158,8 @@ def get_candidate_frames(
         if animation_stopped and not captured:
             # with `--fast`, perform a rough hash
             # so we don't have to extract so many frames later.
-            # This checking make running this portion of code a little bit slower.
-            # However, it should save A LOT of times running `get_frames_from_indexes()`
+            # This checking make this portion of code a little bit slower.
+            # However, it should save A LOT of times getting full images`
             if fast and not is_unique_hash(frame):
                 continue
             captured = True
@@ -156,47 +169,46 @@ def get_candidate_frames(
         if captured and animation_began:
             captured = False
 
-    return extract_indexes(indexes=captured_indexes, include_index=is_multiproc)
+    return extract_indexes(
+        indexes=captured_indexes,
+        include_index=is_multiproc)
 
 
 def get_candidate_frames_concurrent(
     get_candidates: partial,
-    video_iter: list[Frame],
+    video_iter: Iterable[enumerate[Frame]],
     n_worker: int,
     n_frame: int,
-    c_method: str 
+    c_method: str,
 ) -> list[Image]:
     if c_method == "thread":
         pool_executor = ThreadPoolExecutor
         worker_pb = True
     else:
-        pool_executor = ProcessPoolExecutor
+        pool_executor = ProcessPoolExecutor # type: ignore
         worker_pb = False
-    
+
     with pool_executor(n_worker) as exe:
-        def slice_iter(i, e):
+        def slice_iter(i: int, e: Iterator) -> Iterator:
             start = int(i * n_frame/n_worker)
             end = min(int((i+1) * n_frame/n_worker), n_frame)
             return islice(e, start, end)
 
-        vid_gen_trimmed = [
-            slice_iter(i, e) for i, e in enumerate(tee(video_iter, n_worker))
-        ]
+        vid_gen_trimmed = list(
+            starmap(slice_iter, enumerate(tee(video_iter, n_worker))))
+
         print("Done")
         results = [
             exe.submit(
                 partial(get_candidates, proc_label=i+1, enable_pb=worker_pb),
-                list(e)
+                list(e),
             ) for i, e in enumerate(tqdm(vid_gen_trimmed, desc="Load Chunks"))
         ]
         unsorted_frames = chain.from_iterable(
             e.result() for e in as_completed(results)
         )
 
-    sorted_frames = [
-        e[1] for e in sorted(unsorted_frames, key=itemgetter(0))
-    ]
-    return sorted_frames
+    return [e[1] for e in sorted(unsorted_frames, key=itemgetter(0))]
 
 
 def get_frames_from_indexes(
@@ -204,8 +216,8 @@ def get_frames_from_indexes(
     indexes: list[int],
     fast: bool,
     crop_str: str,
-    box_str: str,
-    include_index=False,
+    box_str: str | None,
+    include_index: bool = False,
 ) -> list[Image] | list[tuple[int, Image]]:
     filters = [
         ("drawbox", box_str),
@@ -213,21 +225,22 @@ def get_frames_from_indexes(
     ]
     if not box_str:
         filters.pop(0)
-    
+
     with iio.imopen(input_path, "r", plugin="pyav") as vid:
         read_at = partial(
-            vid.read, 
+            vid.read,
             thread_type="FRAME",
-            filter_sequence=filters,
-            constant_framerate=fast
+            filter_sequence=filters, # type: ignore
+            constant_framerate=fast,
         )
         if include_index:
             return [(i, frame_to_image(read_at(index=i))) for i in indexes]
-        return [frame_to_image(read_at(index=i)) for i in tqdm(indexes, desc="Getting Images")]
+        return [frame_to_image(read_at(index=i)) for i in tqdm(
+            indexes, desc="Getting Images")]
 
 
-def get_unique_frames(
-    frames_bytes: list[bytes],
+def get_unique_images(
+    images: list[Image],
     hash_size: int,
     hash_threshold: int,
     hash_hist_size: int,
@@ -235,17 +248,17 @@ def get_unique_frames(
     unique_frames: list[Image] = []
     prev_hashes: list[ImageHash] = []
 
-    for frame_bytes in tqdm(frames_bytes, desc="Removing dups "):
-        current_hash = dhash(frame_bytes, hash_size=hash_size)
+    for img in tqdm(images, desc="Removing dups "):
+        current_hash = dhash(img, hash_size=hash_size)
         is_unique = not similar_prev_hashes(
             current_hash,
             prev_hashes,
             hash_threshold,
-            hash_hist_size
+            hash_hist_size,
         )
         if not is_unique:
             continue
-        unique_frames.append(frame_bytes)
+        unique_frames.append(img)
         prev_hashes.append(current_hash)
 
     return unique_frames
@@ -253,186 +266,203 @@ def get_unique_frames(
 
 def convert_to_pdf(
     output_path: str,
-    unique_frames: list[Image],
-    extension: str
+    unique_images: list[Image],
+    extension: str,
 ) -> None:
-    if not unique_frames:
+    if not unique_images:
         print("No file was created.")
         return
-
-    with open(output_path, "wb") as f:
-        f.write(to_pdf([
-            iio.imwrite("<bytes>", frame, extension=extension) \
-                for frame in tqdm(unique_frames, desc="Making PDF")
-        ]))
+    get_bytes = partial(iio.imwrite, uri="<bytes>", extension=extension)
+    Path(output_path).write_bytes(
+        img_to_pdf([get_bytes(image=img) for img in
+            tqdm(unique_images, desc="Making PDF")]))
 
 
-def main():
+def main() -> None:
     arg_parser = ArgumentParser(
         description="Miavisc is a video to slide converter.",
     )
     arg_parser.add_argument(
         "-i", "--input",
         type=str, required=True,
-        help="Path to input video file"
+        help="Path to input video file",
     )
     arg_parser.add_argument(
         "-o", "--output",
         type=str, required=True,
-        help="Path to input video file"
+        help="Path to input video file",
     )
     arg_parser.add_argument(
         "-f", "--fast",
         action="store_true", default=False,
-        help="Use various hacks to speed up the process (might affect the final result)."
+        help="Use various hacks to speed up the process"
+             " (might affect the final result).",
     )
     arg_parser.add_argument(
         "-v", "--version",
-        action="version", version="1.0.0"
+        action="version", version="1.0.0",
     )
     arg_parser.add_argument(
         "-c", "--concurrent",
         default=False,
         action="store_true",
-        help="Enable concurrency"
+        help="Enable concurrency",
     )
     arg_parser.add_argument(
         "-k", "--knn",
         default=False, action="store_true",
-        help="Use KNN instead of GMG"
+        help="Use KNN instead of GMG",
     )
     arg_parser.add_argument(
         "-F", "--force",
         default=False, action="store_true",
-        help="Force replace if output file already exists."
+        help="Force replace if output file already exists.",
     )
     arg_parser.add_argument(
         "--hash_size",
         type=int, default=12,
-        help="Hash size. (default = 12)"
+        help="Hash size. (default = 12)",
     )
     arg_parser.add_argument(
         "--hash_threshold",
         type=int, default=6,
-        help="Threshold for final hash (default = 6). "\
-             "Larger number means larger differences are required for image to be considered different "\
-             "(i.e., it become LESS sensitive to small changes)."
+        help="Threshold for final hash (default = 6). "
+             "Larger number means larger differences are required for image "
+             "to be considered different "
+             "(i.e., it become LESS sensitive to small changes).",
     )
     arg_parser.add_argument(
         "--hash_hist_size",
         type=int, default=5,
-        help="Number of frame to look back when deduplicating images. (default = 5; 0 = unlimited)"
+        help="Number of frame to look back when deduplicating images."
+             " (default = 5; 0 = unlimited)",
     )
     arg_parser.add_argument(
         "--max_threshold",
         type=float, default=0.15,
-        help="Max threshold for GMG/KNN (in %%). (default = 0.15)"
+        help="Max threshold for GMG/KNN (in %%). (default = 0.15)",
     )
     arg_parser.add_argument(
         "--min_threshold",
         type=float, default=0.01,
-        help="Min threshold for GMG/KNN (in %%). (default = 0.01)"
+        help="Min threshold for GMG/KNN (in %%). (default = 0.01)",
     )
     arg_parser.add_argument(
         "--d_threshold",
         type=float, default=None,
-        help="Decision threshold for GMG. (default = 0.75) / Dist_2_Threshold for KNN. (default = 100)"
+        help="Decision threshold for GMG. (default = 0.75) "
+             "/ Dist_2_Threshold for KNN. (default = 100)",
     )
     arg_parser.add_argument(
         "--init_frames",
         type=int, default=15,
-        help="Number of initialization frames for GMG. (default = 15)"
+        help="Number of initialization frames for GMG. (default = 15)",
     )
     arg_parser.add_argument(
         "--check_per_sec",
         type=int, default=0,
-        help="How many frame to process in 1 sec. (0 = no skip frame)"
+        help="How many frame to process in 1 sec. (0 = no skip frame)",
     )
     arg_parser.add_argument(
         "--crop_h", "-H",
         type=str, default="0:1:0",
-        help="Top_Border:Content_Height:Bottom_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
+        help="Top_Border:Content_Height:Bottom_Border. "
+             "Calculated in ratio so numbers do not have to "
+             "exactly match source video.",
     )
     arg_parser.add_argument(
         "--crop_w", "-W",
         type=str, default="0:1:0",
-        help="Left_Border:Content_Width:Right_Border. Calculated in ratio so numbers do not have to be exactly match the source video."
+        help="Left_Border:Content_Width:Right_Border. "\
+             "Calculated in ratio so numbers do not have to "
+             "exactly match source video.",
     )
     arg_parser.add_argument(
         "--box_h",
         type=str, default=None,
-        help="Top_Margin:Box_Height:Bottom_Margin. Calculated in ratio so numbers do not have to be exactly match the source video. Applied before crop."
+        help="Top_Margin:Box_Height:Bottom_Margin. "
+             "Calculated in ratio so numbers do not have to "
+             "exactly match source video. Applied before crop.",
     )
     arg_parser.add_argument(
         "--box_w",
         type=str, default=None,
-        help="Left_Margin:Box_Width:Right_Margin. Calculated in ratio so numbers do not have to be exactly match the source video. Applied before crop."
+        help="Left_Margin:Box_Width:Right_Margin. "
+             "Calculated in ratio so numbers do not have to "
+             "exactly match source video. Applied before crop.",
     )
     arg_parser.add_argument(
         "--box_color",
         type=str, default="0xFFFFFF",
-        help="Color of the block, unproductive if --box_w and --box_h are unset. (default = 0xFFFFFF; i.e., white)"
+        help="Color of the block, unproductive if --box_w & --box_h are unset"
+        " (default = 0xFFFFFF; i.e., white)",
     )
     arg_parser.add_argument(
         "--process_scale",
         type=str, default="0.25",
-        help="Process at <num> times the original resolution. (default = 0.25)"
+        help="Process at <num>x the original resolution. (default = 0.25)",
     )
     arg_parser.add_argument(
         "--n_worker", "--c_num",
-        type=int, default=cpu_count()*2,
-        help="Numer of concurrent workers (default = CPU core)"
+        type=int, default=(cpu_count() or 4) * 2,
+        help="Numer of concurrent workers (default = CPU core)",
     )
     arg_parser.add_argument(
         "--concurrent_method", "--c_type",
         type=str, default="thread",
         choices=["thread", "process"],
-        help="Method of concurrent (default = thread)"
+        help="Method of concurrent (default = thread)",
     )
     arg_parser.add_argument(
         "--img_type", "-t",
         type=str, default=".png",
-        choices=[".png" ".jpeg"],
-        help="Encoding for final images. PNG provides better results, JPEG provides smaller file size. (default = .png)"
+        choices=[".png.jpeg"],
+        help="Encoding for final images. PNG provides better results." \
+            "JPEG provides smaller file size. (default = .png)",
+    )
+    arg_parser.add_argument(
+        "--no_check_input", "-U",
+        action="store_true",
+        help="Skip checking input path. Useful for in URL input.",
     )
     args = arg_parser.parse_args()
 
-    if not os.access(args.input, os.R_OK):
+    if not args.no_check_input and not os.access(args.input, os.R_OK):
         raise FileNotFoundError(f"Error! Cannot access {args.input}")
-    
+
     output_dir = os.path.dirname(args.output)
     if not os.access(output_dir, os.F_OK):
         raise FileNotFoundError(f"Error! Path {output_dir} does not exist")
 
     if os.path.exists(args.output) and not args.force:
-        raise FileExistsError(f"{args.output} already exists. To force replace, use '--force' or '-F' option")
-        
+        raise FileExistsError(f"{args.output} already exists."\
+                            "To force replace, use '--force' or '-F' option")
     if not os.access(output_dir, os.W_OK):
         raise PermissionError(f"Error! Cannot write to {output_dir}")
-    
 
-    def get_ffmpeg_pos_str(hs, ws):
+    def get_ffmpeg_pos_str(hs: str, ws: str) -> str:
         l_border, content_w, r_border = (
             f"({e})" if e else "0" for e in ws.split(":")
         )
         t_border, content_h, b_border = (
             f"({e})" if e else "0" for e in hs.split(":")
         )
-        if content_h == "0" or content_w == "0":
+        if "0" in (content_h, content_w):
             raise ValueError("Content/box height or width cannot be zero")
-        
+
         total_w = f"({l_border}+{content_w}+{r_border})"
         total_h = f"({t_border}+{content_h}+{b_border})"
-        w_ratio = f"{content_w}/{total_w}"
-        h_ratio =  f"{content_h}/{total_h}"
-        x_ratio = f"{l_border}/{total_w}"
-        y_ratio = f"{t_border}/{total_h}"
-        
-        return f"x={x_ratio}*in_w:y={y_ratio}*in_h:w={w_ratio}*in_w:h={h_ratio}*in_h"
+        wr = f"{content_w}/{total_w}"
+        hr =  f"{content_h}/{total_h}"
+        xr = f"{l_border}/{total_w}"
+        yr = f"{t_border}/{total_h}"
+
+        return f"x={xr}*in_w:y={yr}*in_h:w={wr}*in_w:h={hr}*in_h"
 
 
     crop_str = get_ffmpeg_pos_str(args.crop_h, args.crop_w)
-    box_str = (get_ffmpeg_pos_str(args.box_h, args.box_w) + f":c={args.box_color}@1.0:t=fill") \
+    box_str = (get_ffmpeg_pos_str(
+        args.box_h, args.box_w) + f":c={args.box_color}@1.0:t=fill") \
         if args.box_h and args.box_w else None
 
     n_frame, video_iter = get_indexed_frames_iter(
@@ -463,23 +493,28 @@ def main():
         hash_threshold=args.hash_threshold,
         hash_hist_size=args.hash_hist_size,
         n_frame=n_frame,
-        extract_indexes=extract_indexes
+        extract_indexes=extract_indexes,
     )
     if args.concurrent:
-        print(f"Using {args.concurrent_method} method with {args.n_worker} workers.\n"
+        print(f"Using {args.concurrent_method} method"
+              " with {args.n_worker} workers.\n"
               "\tInitializing concurrency... ", end=" ")
         candidate_frames = get_candidate_frames_concurrent(
-            get_candidates, video_iter, args.n_worker, n_frame, args.concurrent_method
+            get_candidates,
+            video_iter,
+            args.n_worker,
+            n_frame,
+            args.concurrent_method,
         )
     else:
-        candidate_frames = get_candidates(video_iter)
+        candidate_frames = get_candidates(video_iter) # type: ignore
 
     print(f"\tFound potentially {len(candidate_frames)} unique slides.")
-    unique_frames: list[Frame] = get_unique_frames(
+    unique_frames = get_unique_images(
         candidate_frames,
         args.hash_size,
         args.hash_threshold,
-        args.hash_hist_size
+        args.hash_hist_size,
     )
     print(f"\t{len(unique_frames)} slides remain after postprocessing.")
     convert_to_pdf(args.output, unique_frames, args.img_type)
