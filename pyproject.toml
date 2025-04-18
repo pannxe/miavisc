@@ -45,6 +45,7 @@ select = [
 	"TCH",  # flake8-type-checking
 	"INT",  # flake8-gettext
 	"ARG",  # flake8-unused-arguments
+    "PTH",   # flake8-use-pathlib
 	"PD",  # pandas-vet
 	"PL",  # Pylint
 	"NPY",  # NumPy-specific rules

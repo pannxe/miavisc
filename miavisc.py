@@ -265,7 +265,7 @@ def get_unique_images(
 
 
 def convert_to_pdf(
-    output_path: str,
+    output: Path,
     unique_images: list[Image],
     extension: str,
 ) -> None:
@@ -273,7 +273,7 @@ def convert_to_pdf(
         print("No file was created.")
         return
     get_bytes = partial(iio.imwrite, uri="<bytes>", extension=extension)
-    Path(output_path).write_bytes(
+    output.write_bytes(
         img_to_pdf([get_bytes(image=img) for img in
             tqdm(unique_images, desc="Making PDF")]))
 
@@ -430,15 +430,15 @@ def main() -> None:
     if not args.no_check_input and not os.access(args.input, os.R_OK):
         raise FileNotFoundError(f"Error! Cannot access {args.input}")
 
-    output_dir = os.path.dirname(args.output)
-    if not os.access(output_dir, os.F_OK):
-        raise FileNotFoundError(f"Error! Path {output_dir} does not exist")
+    output = Path(args.output)
+    if not os.access(output.parent, os.F_OK):
+        raise FileNotFoundError(f"Error! Path {output.parent} does not exist")
 
-    if os.path.exists(args.output) and not args.force:
+    if output.exists() and not args.force:
         raise FileExistsError(f"{args.output} already exists."\
                             "To force replace, use '--force' or '-F' option")
-    if not os.access(output_dir, os.W_OK):
-        raise PermissionError(f"Error! Cannot write to {output_dir}")
+    if not os.access(output.parent, os.W_OK):
+        raise PermissionError(f"Error! Cannot write to {output.parent}")
 
     def get_ffmpeg_pos_str(hs: str, ws: str) -> str:
         l_border, content_w, r_border = (
@@ -517,7 +517,7 @@ def main() -> None:
         args.hash_hist_size,
     )
     print(f"\t{len(unique_frames)} slides remain after postprocessing.")
-    convert_to_pdf(args.output, unique_frames, args.img_type)
+    convert_to_pdf(output, unique_frames, args.img_type)
 
     # Windows somehow cannot display emoji.
     print("\tDone! 🔥 🚀" if os_name != "nt" else "\tDone!")
