@@ -300,7 +300,7 @@ def main() -> None:
     )
     arg_parser.add_argument(
         "-v", "--version",
-        action="version", version="1.0.0",
+        action="version", version=__version__,
     )
     arg_parser.add_argument(
         "-c", "--concurrent",
