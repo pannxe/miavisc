@@ -21,6 +21,11 @@ To any professors out there, for the love of capybara and all is that holy in th
 
 ## Installation
 
+From PyPL
+```bash
+pip install miavisc
+```
+
 ```bash
 git clone https://github.com/pannxe/miavisc.git
 cd miavisc
