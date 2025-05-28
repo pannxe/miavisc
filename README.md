@@ -53,6 +53,9 @@ miavisc -fck -i <PATH_TO_VIDEO> -o <PATH_TO_PDF>
 
 ## Brenchmark
 
+> [!NOTE]
+> `--check_per_sec` was removed since version 2.0.0
+
 Tested on Macbook Air M2, 512 GB SSD, 16 GM memory using 1280x720 @ 30fps, mp4, 1:11 hr lecture.
 
 As `--check_per_sec` goes up, risk of page-loss increases but false triggers also decreases. Sweet spot seem to be around 10.
