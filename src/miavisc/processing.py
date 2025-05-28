@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import PIL.Image
-import itertools
 
 __version__ = "2.0.0"
 __author__ = "Krit Patyarath"
