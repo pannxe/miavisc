@@ -32,7 +32,7 @@ Issues = "https://github.com/pannxe/miavisc/issues"
 GitHub = "https://github.com/pannxe/miavisc"
 
 [project.scripts]
-miavisc = "miavisc_cli:main"
+miavisc = "miavisc.cli:main"
 
 [build-system]
 requires = ["hatchling"]
