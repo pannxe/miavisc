@@ -31,5 +31,5 @@ jobs:
         python -m pip install .
     - name: Test run
       run: |
-        python ./src/miavisc_cli.py -Ffk -i tests/react-in-5-minutes.mp4 -o tests/react-in-5-minutes.pdf
-        python ./src/miavisc_cli.py -Ffc -i tests/react-in-5-minutes.mp4 -o tests/react-in-5-minutes.pdf
+        python ./src/miavisc/cli.py -Ffk -i tests/react-in-5-minutes.mp4 -o tests/react-in-5-minutes.pdf
+        python ./src/miavisc/cli.py -Ffc -i tests/react-in-5-minutes.mp4 -o tests/react-in-5-minutes.pdf
