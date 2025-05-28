@@ -2,7 +2,7 @@
 name = "miavisc"
 description = "Miavisc is a video → slide converter"
 version = "2.0.0"
-requires-python = ">= 3.10"
+requires-python = ">= 3.12"
 readme = "README.md"
 
 dependencies = [
@@ -42,7 +42,7 @@ build-backend = "hatchling.build"
 include = ["pyproject.toml", "*.py"]
 exclude = ["*.bak"]
 line-length = 85
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ALL"] 
